@@ -7,6 +7,7 @@
 ## 0. 现状基线（2026-07-17）
 
 M0 全部完成，无遗留技术未知数。
+**M1 代码已完成（T1.1–T1.9），待真机验收；进度与踩坑记录见 [progress.md](progress.md)。**
 
 **m0/ 的定位：施工脚手架,不是代码基础。** 正式开发按完整项目标准从零起项目结构；m0 中被真机验证过的**算法内容**（解析器/包络/事件编码/换算公式）移植进带单测的正式包——移植是"参照已验证逻辑重写",不是复制文件。m0 工具在开发期保留作调试对照,daemon 自带调试命令完全接替后于 M1 收尾删除（git 历史可溯）。知识与常数（图谱/标定/踩坑）已沉淀于 docs/ 与 config 默认值,与 m0 代码无关,永久保留。
 
@@ -39,18 +40,18 @@ M1 写回引擎(daemon 骨架)  →  M2 感知+单轮 AI  →  M3 完整 Agent+�
 
 ### 任务
 
-- [ ] **T1.1 项目骨架**：`cmd/rm2-ai-daemon/main.go` + `internal/{inject,layout,capture,ui,config}` + Makefile（build/deploy/install 三目标，交叉编译 GOARCH=arm GOARM=7）
-- [ ] **T1.2 config**：TOML 加载（`/home/root/.config/rm2-ai/config.toml`）；分区：api、gesture、layout（字号/行距/边距/点间隔/压力包络）、ui 图谱（按固件版本分段）；所有 M0 标定常数做成带默认值的配置项
-- [ ] **T1.3 inject**：从 m0 迁移 emit/report/坐标换算/drawStroke（压力包络、hover 着陆保留）；接口 `Inject(strokes []Stroke, opts)`；设备按名字枚举（"Wacom I2C Digitizer" / "pt_mt"），不写死 eventX
-- [ ] **T1.4 layout**：Hershey 渲染 + SVG path 管线迁移；新增**排版器**：自动换行（词边界）、边距、行距（≥1.8 倍大写高度）、整页预算计算与溢出切分；输出统一 `[]Stroke`
-- [ ] **T1.5 capture**：Go 原生截帧——读 /proc/<pid>/maps 定位 fb0 后匿名区 +8、/proc/<pid>/mem 读帧、u16(0-30) → 灰度 PNG、transpose=3 竖屏；附黑像素计数（探针/验墨用）
-- [ ] **T1.6 ui**：图谱加载 + `probe(state)` / `tap(control)` / `run(feature)` 三原语；探针轮询等待（150ms 间隔 / 2s 超时降级）；实现 select_pen / undo / erase_page / set_pen(type,size,color) 路径
-- [ ] **T1.7 CLI 调试命令**：`rm2-ai-daemon write-text|draw-svg|capture|ui-run|erase-page --debug`（前台模式，M0 工具的正式替代品）
-- [ ] **T1.8 纯逻辑单元测试**：JHF/SVG path 解析、贝塞尔拍平、排版换行、坐标换算、压力包络——全部离设备可测；建 golden 用例（如 girl.svg → 期望折线集）
-- [ ] **T1.9 工程基建**：CI（lint + test + 交叉编译产物）、结构化日志（journald 友好）、错误处理规范（所有设备 IO 带上下文包装）
-- [ ] **T1.10 拆脚手架**：CLI 调试命令验收通过后删除 m0/（git 历史保留）；expect 脚本类辅助并入 Makefile 目标
+- [x] **T1.1 项目骨架**：`cmd/rm2-ai-daemon/main.go` + `internal/{inject,layout,capture,ui,config}` + Makefile（build/deploy/install 三目标，交叉编译 GOARCH=arm GOARM=7）
+- [x] **T1.2 config**：TOML 加载（`/home/root/.config/rm2-ai/config.toml`）；分区：api、gesture、layout（字号/行距/边距/点间隔/压力包络）、ui 图谱（按固件版本分段）；所有 M0 标定常数做成带默认值的配置项
+- [x] **T1.3 inject**：从 m0 迁移 emit/report/坐标换算/drawStroke（压力包络、hover 着陆保留）；接口 `Inject(strokes []Stroke, opts)`；设备按名字枚举（"Wacom I2C Digitizer" / "pt_mt"），不写死 eventX
+- [x] **T1.4 layout**：Hershey 渲染 + SVG path 管线迁移；新增**排版器**：自动换行（词边界）、边距、行距（≥1.8 倍大写高度）、整页预算计算与溢出切分；输出统一 `[]Stroke`
+- [x] **T1.5 capture**：Go 原生截帧——读 /proc/<pid>/maps 定位 fb0 后匿名区 +8、/proc/<pid>/mem 读帧、u16(0-30) → 灰度 PNG、transpose=3 竖屏；附黑像素计数（探针/验墨用）
+- [x] **T1.6 ui**：图谱加载 + `probe(state)` / `tap(control)` / `run(feature)` 三原语；探针轮询等待（150ms 间隔 / 2s 超时降级）；实现 select_pen / undo / erase_page / set_pen(type,size,color) 路径
+- [x] **T1.7 CLI 调试命令**：`rm2-ai-daemon write-text|draw-svg|capture|ui-run|erase-page --debug`（前台模式，M0 工具的正式替代品）
+- [x] **T1.8 纯逻辑单元测试**：JHF/SVG path 解析、贝塞尔拍平、排版换行、坐标换算、压力包络——全部离设备可测；建 golden 用例（如 girl.svg → 期望折线集）
+- [x] **T1.9 工程基建**：CI（lint + test + 交叉编译产物）、结构化日志（journald 友好）、错误处理规范（所有设备 IO 带上下文包装）
+- [ ] **T1.10 拆脚手架**：CLI 调试命令验收通过后删除 m0/（git 历史保留）；expect 脚本类辅助并入 Makefile 目标 —— *阻塞于下方真机验收*
 
-### 验收
+### 验收（待真机；开发机无设备）
 
 - [ ] 命令行输入 200 字符英文文本 → 自动换行排版写入设备当前页，无断笔、总耗时 < 60s
 - [ ] `capture` 输出的 PNG 竖屏方向正确、手写内容清晰

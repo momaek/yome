@@ -1,0 +1,78 @@
+# rm2-ai-daemon configuration — /home/root/.config/rm2-ai/config.toml
+#
+# Every value here is a default already compiled into the binary, shown so you
+# can see what is tunable. Delete anything you do not want to change: a partial
+# file overlays the defaults.
+#
+# Defaults come from the M0 calibration on firmware 3.11.2.5. Retuning them is
+# a config edit, not a rebuild.
+#
+# On secrets: everything on the rM2 runs as root, so file permissions protect
+# nothing here. The real exposure is a lost device or the USB web interface.
+
+[api]
+# "anthropic", or "openai" for an OpenAI-compatible endpoint (vLLM, Ollama, ...).
+provider = "anthropic"
+api_key = ""
+model = "claude-opus-4-8"
+# Only for provider = "openai". The model MUST support vision: looking at the
+# page is the daemon's only way to read what you wrote.
+# base_url = "http://192.168.1.10:8000/v1"
+timeout_sec = 60
+retries = 1
+# An upper bound to stop a model going in circles, not a target. A normal task
+# is 4-6 turns.
+max_turns = 8
+
+[gesture]
+# Screen-space [x0, y0, x1, y1]. The bottom-right corner is inert to xochitl,
+# which is what makes a double tap there safe to use as a trigger.
+zone = [1104, 1572, 1404, 1872]
+tap_max_ms = 300
+gap_max_ms = 600
+dist_max_px = 120
+# Holding the second tap this long selects in-place mode: the hold is the
+# confirmation for a destructive action.
+long_press_ms = 1500
+# Optional second confirmation step for in-place mode.
+confirm = false
+
+[layout]
+# Capital letter height in pixels. ~50px gives roughly 550 characters a page.
+cap_height_px = 50
+# In cap heights. Below 1.8 descenders collide with the next line's capitals.
+line_spacing = 1.8
+
+[layout.margin]
+top = 120
+right = 100
+bottom = 120
+left = 100
+
+[inject]
+# Enumerated by evdev name: event node numbers are not stable across boots.
+pen_device = "Wacom I2C Digitizer"
+touch_device = "pt_mt"
+# Faster and xochitl drops points, breaking strokes; slower and a page crawls.
+point_delay_ms = 5
+point_spacing_px = 3
+landing_pause_ms = 15
+
+# The pressure envelope is what makes injected strokes read as handwriting.
+# Constant pressure gives an even hairline that looks machine-drawn; ramping in
+# and tapering out makes xochitl's brushes vary the stroke width.
+[inject.pressure]
+base = 3400          # of a 4095 maximum
+attack = 0.55        # pressure at the very start, as a fraction of base
+attack_frac = 0.10   # fraction of the stroke spent rising to full
+body_frac = 0.70     # where the taper begins
+release = 0.72       # how far pressure falls by the end
+min_length_px = 12   # shorter strokes keep constant pressure; a dot has no room
+
+[ui]
+# The UI maps for calibrated firmware versions are compiled in. Point this at a
+# TOML file to override or add one without rebuilding.
+# map_path = "/home/root/.config/rm2-ai/ui-map.toml"
+# Skip firmware detection. For testing only: tapping coordinates calibrated
+# against a different firmware can hit anything.
+# firmware = "3.11.2.5"
