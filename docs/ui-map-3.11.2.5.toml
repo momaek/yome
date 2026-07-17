@@ -1,0 +1,72 @@
+# xochitl UI 图谱 — 固件 3.11.2.5(实测于 2026-07-17)
+# 坐标一律为屏幕空间(竖屏 1404×1872);触摸注入时 Y 翻转:touch_y = 1871 - screen_y
+# 点按时长:普通按钮 ≥60ms 即可;打开工具选项面板需 ~200ms(60ms 无效,实测)
+
+[ui."3.11.2.5".meta]
+tap_ms = 80            # 普通点按
+tap_long_ms = 200      # 打开选项面板
+# 两次点击间的缓冲:不用固定 sleep,用探针轮询等待(fb 内存比墨水屏先就绪)
+tap_gap_min_ms = 150   # 硬下限:防相邻快击被识别为双击/引发内部竞争
+probe_poll_ms = 150    # 点击后轮询 verify 探针的间隔
+probe_timeout_ms = 2000 # 超时未达期望状态 → 降级全帧截图重定位,绝不继续盲打
+
+# ---------- 探针:命名状态 → 采样点 + 期望 ----------
+[ui."3.11.2.5".probes]
+toolbar_open   = { at = [55, 155], expect = "dark" }    # 工具位有图标
+panel_open     = { at = [345, 130], expect = "dark" }   # 面板边框/标题区非白
+blank_page     = { black_max = 4000 }                   # 全帧黑像素数上限(空白判定)
+
+# ---------- 控件 ----------
+[ui."3.11.2.5".controls]
+toolbar_toggle  = { tap = [55, 52] }
+tool_pen        = { tap = [55, 155], requires = "toolbar_open" }
+tool_text       = { tap = [55, 260], requires = "toolbar_open" }
+tool_eraser     = { tap = [55, 365], requires = "toolbar_open" }
+tool_select     = { tap = [55, 470], requires = "toolbar_open" }
+undo            = { tap = [55, 570], requires = "toolbar_open" }   # 已实战
+redo            = { tap = [55, 675], requires = "toolbar_open" }
+pen_panel       = { tap = [55, 155], hold = "long", requires = "toolbar_open" }  # 笔已选中时
+eraser_panel    = { tap = [55, 365], hold = "long", requires = "toolbar_open" }  # 橡皮已选中时
+add_page        = { tap = [1263, 936] }   # 瞬态:最后一页向前滑后出现
+
+# 笔选项面板(pen_panel 打开后;点击选中即生效,面板保持开启)
+pen_ballpoint   = { tap = [189, 237] }
+pen_fineliner   = { tap = [293, 237] }
+pen_pencil      = { tap = [397, 237] }
+pen_mech_pencil = { tap = [502, 237] }
+pen_marker      = { tap = [189, 341] }
+pen_highlighter = { tap = [293, 341] }
+pen_paintbrush  = { tap = [397, 341] }
+pen_calligraphy = { tap = [502, 341] }
+size_thin       = { tap = [189, 555] }   # 注意:每种笔各自记忆粗细
+size_medium     = { tap = [293, 555] }
+size_thick      = { tap = [397, 555] }
+color_black     = { tap = [189, 703] }
+color_gray      = { tap = [293, 703] }
+color_white     = { tap = [397, 703] }
+color_blue      = { tap = [189, 830] }
+color_red       = { tap = [293, 830] }
+
+# 橡皮选项面板(eraser_panel 打开后)
+eraser_normal    = { tap = [189, 443] }
+eraser_selection = { tap = [293, 443] }
+eraser_size_thin = { tap = [189, 658] }
+eraser_size_med  = { tap = [293, 658] }
+eraser_size_thick = { tap = [395, 658] }
+erase_all        = { tap = [290, 794] }   # ★ 整页清空,无需二级菜单;已实战验证
+
+# ---------- 功能:控件路径("?" = 状态已满足则跳过) ----------
+[ui."3.11.2.5".features]
+select_pen   = ["toolbar_toggle?", "tool_pen", "toolbar_toggle"]
+select_pen_type = ["toolbar_toggle?", "tool_pen", "pen_panel", "<pen_type>", "toolbar_toggle"]
+undo_last    = ["toolbar_toggle?", "undo", "toolbar_toggle"]
+erase_page   = ["toolbar_toggle?", "tool_eraser", "eraser_panel", "erase_all", "tool_pen", "toolbar_toggle"]
+# erase_page 已于 2026-07-17 全链路盲打验证(终态探针:黑像素回归空白基线)
+
+# ---------- 状态机 ----------
+# S0 折叠 --toolbar_toggle--> S1 展开(某工具选中)
+# S1 --tap 其他工具--> S1' (选中迁移;短按即可)
+# S1(工具X选中) --长按 工具X 图标 200ms--> S2.X 选项面板
+# S2.X --tap 面板内选项--> S2.X (生效且面板保持)
+# S2.X --tap 其他工具图标--> S1' (面板关闭,工具切换)
+# S1 --toolbar_toggle--> S0
