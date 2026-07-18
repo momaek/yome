@@ -33,8 +33,17 @@ func openListener(cfg config.Config) (*trigger.Listener, error) {
 	return trigger.Listen(path, triggerOptions(cfg.Gesture), nil)
 }
 
-// runTrigger prints recognised gestures until interrupted — the calibration
-// tool for the gesture thresholds and zone.
+// openEraser locates the pen digitizer and starts eraser-stroke capture.
+func openEraser(cfg config.Config) (*trigger.EraserListener, error) {
+	path, err := inject.FindDevice(cfg.Inject.PenDevice)
+	if err != nil {
+		return nil, fmt.Errorf("locate pen device: %w", err)
+	}
+	return trigger.ListenEraser(path, nil)
+}
+
+// runTrigger prints recognised gestures and eraser strokes until interrupted —
+// the calibration tool for the gesture thresholds, the zone, and the eraser.
 func runTrigger(args []string) error {
 	fs := flag.NewFlagSet("trigger", flag.ExitOnError)
 	cf := addCommon(fs)
@@ -52,8 +61,14 @@ func runTrigger(args []string) error {
 	}
 	defer l.Close()
 
+	e, err := openEraser(cfg)
+	if err != nil {
+		return err
+	}
+	defer e.Close()
+
 	z := cfg.Gesture.Rect()
-	fmt.Fprintf(os.Stderr, "listening; zone x %.0f-%.0f y %.0f-%.0f — double-tap = new-page, hold the second tap = in-place (Ctrl-C to stop)\n",
+	fmt.Fprintf(os.Stderr, "listening; zone x %.0f-%.0f y %.0f-%.0f — double-tap = new-page, hold the second tap = in-place; pen-eraser strokes are printed too (Ctrl-C to stop)\n",
 		z.X, z.Right(), z.Y, z.Bottom())
 
 	sig := make(chan os.Signal, 1)
@@ -63,6 +78,11 @@ func runTrigger(args []string) error {
 		case g := <-l.Gestures():
 			fmt.Printf("%s  gesture %-9s at (%.0f,%.0f)\n",
 				time.Now().Format("15:04:05.000"), g.Mode, g.At.X, g.At.Y)
+		case s := <-e.Strokes():
+			fmt.Printf("%s  erase     x %.0f-%.0f y %.0f-%.0f (%d pts, %s)\n",
+				time.Now().Format("15:04:05.000"),
+				s.BBox.X, s.BBox.Right(), s.BBox.Y, s.BBox.Bottom(),
+				s.Points, s.End.Sub(s.Start).Round(time.Millisecond))
 		case <-sig:
 			return nil
 		}

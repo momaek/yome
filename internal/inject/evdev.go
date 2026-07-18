@@ -15,6 +15,7 @@ const (
 	synReport = 0x00
 
 	btnToolPen    = 0x140
+	btnToolRubber = 0x141
 	btnToolFinger = 0x145
 	btnTouch      = 0x14a
 

@@ -401,6 +401,37 @@ func runSwipe(args []string) error {
 		*steps, time.Duration(*delay)*time.Millisecond)
 }
 
+// runEraseStroke scrubs the synthetic eraser along a line between two
+// physical screen points — the calibration tool for injected erasing. The
+// band width follows xochitl's eraser size setting.
+func runEraseStroke(args []string) error {
+	fs := flag.NewFlagSet("erase-stroke", flag.ExitOnError)
+	cf := addCommon(fs)
+	x0 := fs.Float64("x0", -1, "start x")
+	y0 := fs.Float64("y0", -1, "start y")
+	x1 := fs.Float64("x1", -1, "end x")
+	y1 := fs.Float64("y1", -1, "end y")
+	if err := parse(fs, cf, args); err != nil {
+		return err
+	}
+	if *x0 < 0 || *y0 < 0 || *x1 < 0 || *y1 < 0 {
+		return fmt.Errorf("%w: -x0 -y0 -x1 -y1 are required", errUsage)
+	}
+
+	cfg, err := loadConfigOnly(*cf.config)
+	if err != nil {
+		return err
+	}
+	in, err := inject.Open(cfg.Inject.Options())
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	return in.Erase([]geom.Stroke{{Points: []geom.Point{
+		{X: *x0, Y: *y0}, {X: *x1, Y: *y1},
+	}}})
+}
+
 // runRecord dumps raw events from an input device — the calibration tool for
 // recording real interactions (M3's add-page experiment records a human doing
 // it, then replays the minimal sequence).

@@ -111,10 +111,59 @@ func (in *Injector) Close() error {
 // that is the eraser, this silently erases instead of writing. Callers must
 // force the pen tool first (see internal/ui) and verify ink afterwards.
 func (in *Injector) Strokes(strokes []geom.Stroke) error {
+	return in.trace(btnToolPen, strokes)
+}
+
+// Erase traces the same trajectories with the rubber tool announced instead
+// of the pen — the synthetic twin of the Marker Plus eraser end. xochitl maps
+// BTN_TOOL_RUBBER to the eraser regardless of which tool the toolbar has
+// selected (that is why the hardware eraser needs no tool switch), so unlike
+// Strokes this needs no UI preparation and cannot be hijacked by the user's
+// tool selection. The erased band's width follows xochitl's eraser size
+// setting.
+func (in *Injector) Erase(strokes []geom.Stroke) error {
+	return in.trace(btnToolRubber, strokes)
+}
+
+// hoverDistance is the ABS_DISTANCE the synthetic rubber "approaches" from
+// during its proximity-in ramp.
+const hoverDistance = 60
+
+// firstDrawable returns the first stroke that would actually be traced, or
+// nil when every stroke is degenerate.
+func firstDrawable(strokes []geom.Stroke) *geom.Stroke {
+	for i := range strokes {
+		if len(strokes[i].Points) >= 2 {
+			return &strokes[i]
+		}
+	}
+	return nil
+}
+
+// trace injects a set of polylines under the given tool announcement.
+func (in *Injector) trace(tool uint16, strokes []geom.Stroke) error {
 	w := &writer{w: in.pen}
 
-	w.emit(evKey, btnToolPen, 1)
-	w.report()
+	// The hardware announces a tool with its position and hover distance in
+	// the same packet, then closes the distance to zero before touching down.
+	// The bare announcement that satisfies xochitl for the pen was ignored
+	// for the rubber (on-device, fw 3.27.3.0), so mimic the real
+	// proximity-in for it.
+	w.emit(evKey, tool, 1)
+	if first := firstDrawable(strokes); tool == btnToolRubber && first != nil {
+		x, y := ToWacom(first.Points[0])
+		w.emit(evAbs, absX, x)
+		w.emit(evAbs, absY, y)
+		w.emit(evAbs, absDistance, hoverDistance)
+		w.report()
+		for d := int32(hoverDistance) - 20; d >= 0; d -= 20 {
+			w.emit(evAbs, absDistance, d)
+			w.report()
+			in.sleep(in.opts.PointDelay)
+		}
+	} else {
+		w.report()
+	}
 	in.sleep(50 * time.Millisecond)
 
 	for i, s := range strokes {
@@ -127,10 +176,10 @@ func (in *Injector) Strokes(strokes []geom.Stroke) error {
 		}
 	}
 
-	w.emit(evKey, btnToolPen, 0)
+	w.emit(evKey, tool, 0)
 	w.report()
 	if w.err != nil {
-		return fmt.Errorf("lift pen: %w", w.err)
+		return fmt.Errorf("lift tool: %w", w.err)
 	}
 	return nil
 }
