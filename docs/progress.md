@@ -10,7 +10,7 @@
 | M0 通路验证 | ✅ 完成（2026-07-17，真机实测） |
 | M1 写回引擎 + daemon 骨架 | ✅ **完成（2026-07-18 真机验收通过，T1.1–T1.10 全部完成）** |
 | M2 感知 + 单轮 AI | 🟡 **代码完成 + mock 全链路真机通过（含中文写回）；真模型验收待 API key 配置** |
-| M3 完整 Agent + 手势 | ⬜ 未开工 |
+| M3 完整 Agent + 手势 | 🟡 **代码完成（T3.1–T3.9 全部实现，离机测试全绿）；真机验收与四项标定待做** |
 | M4 打磨 | ⬜ 未开工 |
 
 ---
@@ -215,3 +215,46 @@ write_text 中英混排 3 行 224 笔画注入(45.2s) → 区域验墨 delta 270
 
 1. 用户配置真实 API key → 真模型验收(M2 收尾)。
 2. M3:trigger 手势正式化、read_page/new_page/draw 工具、erase_page 门控、systemd 常驻。
+
+---
+
+## M3 — 完整 Agent 与手势触发（2026-07-18,代码完成;真机验收待做）
+
+### 已完成
+
+| 任务 | 落点 | 说明 |
+|---|---|---|
+| T3.1 trigger | `internal/trigger` | 纯状态机检测器(帧输入,全时序规则离机单测)+ evdev 监听器(只读不 grab,MT 协议 B,多指即取消);双击=新页,双击+第二击长按 1.5s=原地——**在阈值时刻触发而非松手**,按住本身就是确认;Pause/Resume 供会话注入期挂起(注入的触摸事件与用户手指走同一设备);新增 `trigger` CLI 标定命令 |
+| tool_result 图片 | `internal/llm` `internal/agent` | read_page 的前提:anthropic 侧 tool_result content 变 part 数组;openai chat completions 的 tool 消息不支持图片,降级为紧随的 user 图片消息;`agent.Tool.Run` 返回结构化 `Result{Text, Images}`;双适配器线格式单测 |
+| T3.2 read_page | `cmd/…/tools.go` + `pagenav.go` | 视图向横滑翻页 + 截图 + 翻回;全程帧指纹(md5 整帧)校验:滑后帧未变=已到首/末页(如实告知模型),翻回后指纹不符=警告模型禁止再写;截图等两次连读一致(防撕裂帧) |
+| T3.3 draw | `cmd/…/tools.go` | SVG path → ParsePaths → Fit(等比归一化+边界裁剪)→ 注入;目标框可选,缺省流式排在已写内容之下;过小区域(<40px)拒绝并提示 new_page |
+| T3.4 new_page | 图谱 `add_page` feature | **改走 ⋮ 菜单显式 Add page 入口**(3.27 图谱已标定,两朝向都有),不再用"末页滑动"(M0 实测过触发)也无需 record 回放实验;帧指纹变化验证加页生效,失败即报错不假装成功 |
+| T3.5 erase_page + 门控 | `internal/backup` + tools.go | 仅原地会话注册(新页会话的工具表里没有它);擦除前字节级复制笔记本全部文件(`uuid*` glob,不解析 .rm)到 `~/.cache/rm2-ai/backups/`,**备份失败即中止擦除**;当前笔记本=最新 mtime 的 .content(启发式,日志记录所选 uuid) |
+| T3.6 style 参数 | tools.go + `ui.SetPen` | write_text/draw 可带 {pen,size,color},走图谱面板路径;词表排除 highlighter/shader(半透明工具把正文渲染成灰块,M1 实测);同款样式去重零开销,真实切换后等 tool_settle |
+| T3.7 溢出续写 | tools.go + prompt | write_text 返回未写入行 + "call new_page then write exactly those lines";toolbox 可写区域流动:写入推进,new_page/erase_page 重置为整页 |
+| T3.8 serve + systemd | `cmd/…/serve.go` `deploy/rm2-ai.service` | 手势→会话循环:执行期挂起识别、每次手势重探朝向(朝向是笔记本属性)、preflight 失败/会话失败/panic 均角落 × + 继续服务;沙漏状态笔迹(单笔画=单步 undo,capture 之后注入故模型看不见);`make install` 装 unit 并启动,固件升级后重跑即可 |
+| T3.9 prompt v2 | `internal/agent/prompt.go` | 感知→判断→一次规划整体执行三段式;任务判断准则(问答/整理/润色/重绘/图文);放置策略(短回复页内、长回复与重绘走新页);溢出协议;样式成本提示;原地模式段(擦除前先构思完整重写,信息只增不减);本页/新页双预算 |
+
+### 设计决定
+
+- **new_page 弃用 record 回放方案**。dev-plan T3.4 原计划录制真人加页操作;3.27 图谱标定时发现 ⋮ 菜单有显式 "Add page" 入口,盲打两 tap + 帧指纹验证即可,不依赖脆弱的事件序列回放。record 命令保留,若 menu_add_page 点击真机验证失败再回退。
+- **手势即模式,阈值即触发**。原地手势在长按达到 1.5s 的瞬间触发(用户还按着),而非松手后——用户得到"按住生效"的确定反馈,检测器也无需区分松手时序。
+- **沙漏画在 capture 之后**。状态笔迹是给用户看的,模型不该看见;会话礼仪的工具记录也提前到沙漏之前(画沙漏会强制切笔)。
+- **笔样式改动不可完全恢复**。会话结束恢复的是工具类别(笔/橡皮/选择);模型若换了笔型/颜色,xochitl 会记住——用户原笔型我们读不到(.content LastPen 解析排 M4),先在日志里如实警告。
+- **翻页方向语义待复核**。3.27 图谱注明"左滑/右滑均触发 loadPage,方向语义待 M3 复核";pagenav 按 M0 语义(视图向左滑=下一页)实现,真机验证清单第一项就是它。
+
+### 待真机验证(M3 验收清单,依赖标定顺序排列)
+
+标定与单点验证:
+- [ ] `trigger -debug`:双击/长按识别率与误触率(注意横屏时触发区在视图左下角——zone 是物理坐标)
+- [ ] 翻页方向语义:`swipe` 注入后确认"视图左滑=下一页"在 3.27 仍成立(pagenav.go 常量)
+- [ ] `ui-run -feature add_page`:menu_add_page 点击首次实测(两朝向)
+- [ ] read_page 全链路:翻页→截图→翻回,指纹校验通过;首页 offset=-1 如实报"已是第一页"
+- [ ] style 路径:`select_pen_type` 面板点击在会话流程中实测(面板坐标 9 项已单测点击,组合流程未跑)
+
+验收(dev-plan 4 节):
+- [ ] A:纯设备操作——手写一页 → 角落双击 → 润色文字写入新页
+- [ ] B:手绘潦草流程图 → 手势 → Agent 在新页画出工整版本(draw 实战)
+- [ ] C:原地模式——双击+长按 → 备份 → 擦除本页 → 重写(含工具恢复)
+- [ ] 断网/超时/API 错误均角落 × 且 daemon 不崩;systemd 重启后功能正常
+- [ ] (M2 遗留)真实 api_key 配置后的真模型验收;openai provider 对自建端点实测
