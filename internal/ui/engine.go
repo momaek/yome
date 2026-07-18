@@ -396,6 +396,38 @@ func (e *Engine) SetPen(penType, size, color string) error {
 	return nil
 }
 
+// CurrentTool reads which tool xochitl has selected, via the selected-state
+// probes: "pen", "eraser", "select", or "" when none of the probed states
+// hold (an unprobed tool like text or highlighter, or a hidden toolbar).
+func (e *Engine) CurrentTool() string {
+	for _, t := range []struct{ name, probe string }{
+		{"pen", "pen_selected"},
+		{"eraser", "eraser_selected"},
+		{"select", "select_selected"},
+	} {
+		if _, ok := e.ver.Probes[t.probe]; !ok {
+			continue
+		}
+		if ok, err := e.Probe(t.probe); err == nil && ok {
+			return t.name
+		}
+	}
+	return ""
+}
+
+// RestoreTool switches back to a tool previously reported by CurrentTool.
+// The user should not find their pen swapped after a session (plan 4.3).
+func (e *Engine) RestoreTool(name string) error {
+	switch name {
+	case "", "pen":
+		return nil // pen is what sessions leave selected anyway
+	case "eraser", "select":
+		return e.Tap("tool_" + name)
+	default:
+		return fmt.Errorf("unknown tool %q", name)
+	}
+}
+
 // Undo taps the undo button. Reserved for the daemon's own error recovery.
 func (e *Engine) Undo() error { return e.Run("undo_last", nil) }
 

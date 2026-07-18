@@ -48,7 +48,7 @@ func runWriteText(args []string) error {
 
 	opt := textOptions(s.cfg.Layout, *size, *spacing)
 	opt.Area = s.pageArea() // landscape notebooks get the rotated writable area
-	res := layout.Text(layout.Futural(), body, opt)
+	res := layout.Text(layout.DefaultFace(), body, opt)
 	slog.Info("typeset", "lines", len(res.Lines), "strokes", len(res.Strokes), "overflow_lines", len(res.Overflow))
 
 	start := time.Now()
@@ -72,7 +72,7 @@ func dryRunText(configPath, body string, size, spacing float64) error {
 		return err
 	}
 	opt := textOptions(cfg.Layout, size, spacing)
-	f := layout.Futural()
+	f := layout.DefaultFace()
 	res := layout.Text(f, body, opt)
 
 	fmt.Printf("area      %.0fx%.0f at (%.0f,%.0f)\n", opt.Area.W, opt.Area.H, opt.Area.X, opt.Area.Y)

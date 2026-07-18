@@ -9,7 +9,7 @@ import (
 )
 
 func TestWrapAtWordBoundaries(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	const cap = 50.0
 
 	text := "the quick brown fox jumps over the lazy dog"
@@ -34,7 +34,7 @@ func TestWrapAtWordBoundaries(t *testing.T) {
 }
 
 func TestWrapKeepsHardLineBreaks(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	lines := Wrap(f, "one\n\ntwo", 50, 10000)
 	want := []string{"one", "", "two"}
 	if len(lines) != len(want) {
@@ -48,7 +48,7 @@ func TestWrapKeepsHardLineBreaks(t *testing.T) {
 }
 
 func TestWrapBreaksAWordTooLongToFit(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	const cap = 50.0
 	width := f.Measure("aaa", cap)
 
@@ -69,12 +69,12 @@ func TestWrapBreaksAWordTooLongToFit(t *testing.T) {
 }
 
 func TestTextOverflowsRatherThanRunningOffThePage(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	opt := TextOptions{
 		CapHeightPx: 50,
 		LineSpacing: 1.8,
 		// Tall enough for two lines only.
-		Area: geom.Rect{X: 0, Y: 0, W: 400, H: f.OvershootPx(50) + 50*1.8 + 50 + f.DescentPx(50)},
+		Area: geom.Rect{X: 0, Y: 0, W: 400, H: f.OvershootPx(50, false) + 50*1.8 + 50 + f.DescentPx(50, false)},
 	}
 	res := Text(f, "alpha\nbravo\ncharlie\ndelta", opt)
 
@@ -99,7 +99,7 @@ func TestTextOverflowsRatherThanRunningOffThePage(t *testing.T) {
 }
 
 func TestTextStaysInsideItsArea(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	opt := TextOptions{
 		CapHeightPx: 40,
 		LineSpacing: 1.8,
@@ -119,7 +119,7 @@ func TestTextStaysInsideItsArea(t *testing.T) {
 }
 
 func TestLineSpacingIsClampedToTheDescenderFloor(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	area := geom.Rect{X: 0, Y: 0, W: 1000, H: 1000}
 
 	// A caller asking for 1.0 must still get MinLineSpacing: below that,
@@ -135,17 +135,17 @@ func TestLineSpacingIsClampedToTheDescenderFloor(t *testing.T) {
 }
 
 func TestDescendersClearTheNextLine(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	const cap = 50.0
 	// The gap between a descender's lowest point and the next line's cap top.
-	gap := cap*MinLineSpacing - (cap + f.DescentPx(cap))
+	gap := cap*MinLineSpacing - (cap + f.DescentPx(cap, false))
 	if gap <= 0 {
 		t.Errorf("at %.1f spacing, descenders overlap the next line by %.2fpx", MinLineSpacing, -gap)
 	}
 }
 
 func TestPageBudget(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	// The M0 estimate: ~550 characters per page of 50px text.
 	opt := TextOptions{
 		CapHeightPx: 50,
@@ -166,7 +166,7 @@ func TestPageBudget(t *testing.T) {
 }
 
 func TestPageBudgetIsHonestAboutTinyAreas(t *testing.T) {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	opt := TextOptions{CapHeightPx: 50, LineSpacing: 1.8, Area: geom.Rect{W: 1000, H: 10}}
 	if got := PageBudget(f, opt); got != 0 {
 		t.Errorf("PageBudget for an area too short for one line = %d, want 0", got)
@@ -234,7 +234,7 @@ func TestFitClipsToTheArea(t *testing.T) {
 }
 
 func ExampleWrap() {
-	f := Futural()
+	f := NewFace(Futural(), nil)
 	for _, l := range Wrap(f, "the quick brown fox jumps over the lazy dog", 50, 500) {
 		fmt.Printf("%q\n", l)
 	}

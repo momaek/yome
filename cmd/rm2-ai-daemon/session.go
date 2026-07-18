@@ -268,6 +268,89 @@ func writeBounds(strokes []geom.Stroke) image.Rectangle {
 	return image.Rect(int(b.X)-pad, int(b.Y)-pad, int(b.Right())+pad, int(b.Bottom())+pad)
 }
 
+// viewImage captures the frame as the user sees it: the physical portrait
+// frame, rotated into landscape-view orientation when the notebook is
+// rotated. This is the image a vision model must be shown.
+func (s *session) viewImage() (*image.Gray, error) {
+	fb, err := s.requireFB()
+	if err != nil {
+		return nil, err
+	}
+	img, err := fb.Image()
+	if err != nil {
+		return nil, err
+	}
+	if s.orientation() == ui.Landscape {
+		img = capture.ToLandscapeView(img)
+	}
+	return img, nil
+}
+
+// freeAreaBelowInk shrinks the writable area to the space below the lowest
+// user ink.
+//
+// Page-template dot grids are pure black but only 1-2px across (measured on
+// 3.27), so darkness alone cannot tell a template from handwriting. Real
+// strokes are 3px+ wide, so a row only counts as inked when it holds a
+// contiguous run of dark pixels — isolated dots never form one.
+func freeAreaBelowInk(img *image.Gray, area geom.Rect, gapPx float64) geom.Rect {
+	const (
+		minRun   = 3 // shortest dark run that counts as a stroke crossing
+		minRunPx = 6 // total stroke pixels a row needs to count as content
+	)
+	lowest := -1.0
+	x0, x1 := int(area.X), int(area.Right())
+	y0, y1 := int(area.Y), int(area.Bottom())
+	b := img.Bounds()
+	x0, x1 = max(x0, b.Min.X), min(x1, b.Max.X)
+	y0, y1 = max(y0, b.Min.Y), min(y1, b.Max.Y)
+	for y := y0; y < y1; y++ {
+		run, strokePx := 0, 0
+		for x := x0; x < x1; x++ {
+			if img.Pix[y*img.Stride+x] < capture.BlackThreshold {
+				run++
+				if run >= minRun {
+					strokePx++
+				}
+				continue
+			}
+			run = 0
+		}
+		if strokePx >= minRunPx {
+			lowest = float64(y)
+		}
+	}
+	if lowest < 0 {
+		return area // blank page: everything is free
+	}
+	top := lowest + gapPx
+	return geom.Rect{X: area.X, Y: top, W: area.W, H: area.Bottom() - top}
+}
+
+// markError injects a small "×" near the page's bottom-right corner (the
+// trigger zone, inert to xochitl) so the user sees that a session failed
+// even without a terminal attached. Best effort: it must never mask the
+// original error.
+func (s *session) markError() {
+	const arm = 40.0
+	w, h := float64(geom.ScreenW), float64(geom.ScreenH)
+	if s.orientation() == ui.Landscape {
+		w, h = geom.LandscapeW, geom.LandscapeH
+	}
+	x1, y1 := w-60, h-60
+	x0, y0 := x1-arm, y1-arm
+	strokes := []geom.Stroke{
+		{Points: []geom.Point{{X: x0, Y: y0}, {X: x1, Y: y1}}},
+		{Points: []geom.Point{{X: x1, Y: y0}, {X: x0, Y: y1}}},
+	}
+	if s.orientation() == ui.Landscape {
+		strokes = geom.LandscapeStrokes(strokes)
+	}
+	if err := s.in.Strokes(strokes); err != nil {
+		slog.Warn("could not draw the error mark", "err", err)
+	}
+}
+
 // readTextArg resolves -text / -file into the text to write.
 func readTextArg(text, file string) (string, error) {
 	switch {

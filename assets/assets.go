@@ -17,3 +17,10 @@ var FuturalJHF string
 //
 //go:embed ui
 var UIMaps embed.FS
+
+// CJKMedians is the gzipped binary table of per-stroke centerlines for 9500+
+// Chinese characters, generated from makemeahanzi by tools/gen-cjk. The data
+// derives from Arphic fonts — see cjk/ARPHICPL.TXT for its license.
+//
+//go:embed cjk/medians.bin.gz
+var CJKMedians []byte
