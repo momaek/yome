@@ -12,6 +12,7 @@ import (
 	"github.com/momaek/yome/internal/config"
 	"github.com/momaek/yome/internal/geom"
 	"github.com/momaek/yome/internal/inject"
+	"github.com/momaek/yome/internal/penstate"
 	"github.com/momaek/yome/internal/ui"
 )
 
@@ -39,6 +40,47 @@ type session struct {
 
 	orient         ui.Orientation
 	orientDetected bool
+
+	pen     penstate.State
+	penErr  error
+	penRead bool
+}
+
+// recordPenState reads the user's pen type/size/color from xochitl's settings,
+// once, before the session's own panel taps can overwrite them. A read failure
+// is kept, not raised: it only matters if the model changes the style, and
+// then the restore path reports it honestly.
+func (s *session) recordPenState() {
+	if s.penRead {
+		return
+	}
+	s.penRead = true
+	s.pen, s.penErr = penstate.Read(penstate.DefaultConfPath)
+	if s.penErr != nil {
+		slog.Debug("user's pen style unknown", "err", s.penErr)
+		return
+	}
+	slog.Debug("user's pen style recorded", "state", s.pen)
+}
+
+// restorePenStyle puts the user's pen back after the model styled it, via the
+// same panel path the model used. Best effort with honest logs: an unreadable
+// conf or an unmapped pen id means the model's choice sticks, as before.
+func (s *session) restorePenStyle() {
+	if s.penErr != nil {
+		slog.Warn("the session changed the pen style and the user's previous pen could not be read", "err", s.penErr)
+		return
+	}
+	pen, size, color := s.pen.Controls()
+	if pen == "" {
+		slog.Warn("the session changed the pen style and the user's pen id has no calibrated control", "state", s.pen)
+		return
+	}
+	if err := s.ui.SetPen(pen, size, color); err != nil {
+		slog.Warn("could not restore the user's pen style", "pen", pen, "err", err)
+		return
+	}
+	slog.Info("user's pen style restored", "pen", pen, "size", size, "color", color)
 }
 
 // resolveUIVersion loads the UI maps and picks the section matching the
