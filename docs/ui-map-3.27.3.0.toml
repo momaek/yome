@@ -1,0 +1,161 @@
+# xochitl UI 图谱 — 固件 3.27.3.0(实测于 2026-07-17,Qt6)
+# 坐标一律为屏幕空间(竖屏 1404×1872);触摸注入时 Y 翻转不变:touch_y = 1871 - screen_y
+# ⚠ 与 3.11.2.5 的重大差异:
+#   1. 截帧方式变了:xochitl 现在 mmap /dev/fb0(mxs-lcdif,EPD 波形数据,不可直接读图);
+#      真帧缓冲 = maps 中 /dev/fb0 行的**下一个**映射区起始 + 2629632 + 8,
+#      格式 BGRA8888 1404×1872×4(goMarkableStream 3.24+ 同款方法,已实测)。
+#      旧的 u16 灰度(0=黑 30=白)格式不复存在。
+#   2. 触摸注入必须携带 BTN_TOUCH + BTN_TOOL_FINGER(m0 的 -btn 变体);
+#      纯 MT 序列的滑动可被识别,但 tap 仅 -btn 版本实测确认有效。
+#   3. 工具栏布局全变:竖排常驻左边缘,无独立"开关"按钮(旧 toolbar_toggle (55,52) 已消失);
+#      荧光笔/文字/图层/标签/页面总览为新增独立入口。
+#   4. 笔型从 8 种变 9 种(新增 Shader;Highlighter 同时出现在面板与工具栏)。
+
+[ui."3.27.3.0".meta]
+tap_ms = 80            # 普通点按(2 报文 × 40ms,实测可靠)
+tap_long_ms = 600      # 打开工具选项面板(600ms 实测可靠;更短未测)
+tap_gap_min_ms = 150   # 沿用:防相邻快击竞争
+probe_poll_ms = 150
+probe_timeout_ms = 2000
+# 注意:曾出现过一段时间内所有 tap 无响应、随后同样的 tap 正常的现象(原因未定位,
+# 疑与 UI 焦点/首触激活有关)。探针验证 + 超时重试是硬要求,绝不盲打。
+# 工具栏不自动隐藏:空闲 65s 实测仍常驻(选中块与图标像素稳定)。
+
+[ui."3.27.3.0".capture]
+method = "proc_mem_after_fb0"
+offset = 2629640          # 2629632 + 8,相对 /dev/fb0 下一映射区起始
+format = "BGRA8888"
+width = 1404
+height = 1872
+
+# ---------- 探针:命名状态 → 采样点 + 期望 ----------
+# 工具选中态 = 图标处 110×110 反色块,大面积暗(dark ratio > 0.5)
+[ui."3.27.3.0".probes]
+toolbar_open      = { at = [55, 55], expect = "dark" }     # 顶部时钟图标笔画
+pen_selected      = { region = [0, 112, 110, 222], expect = "dark_block" }
+eraser_selected   = { region = [0, 449, 110, 559], expect = "dark_block" }
+select_selected   = { region = [0, 560, 110, 670], expect = "dark_block" }
+pen_panel_open    = { at = [300, 113], expect = "dark" }   # 面板顶边框(x 113–511)
+eraser_panel_open = { at = [300, 448], expect = "dark" }   # 橡皮面板顶边框
+blank_page        = { black_max = 4000 }
+
+# ---------- 控件 ----------
+# 工具栏(左边缘竖排,图标中心 x=55,间距 ~112)
+[ui."3.27.3.0".controls]
+clock          = { tap = [55, 55] }       # 顶部时钟/专注(未实测点击后果,勿盲点)
+tool_pen       = { tap = [55, 167] }      # 已实战
+tool_highlight = { tap = [55, 280] }
+tool_text      = { tap = [55, 391] }
+tool_eraser    = { tap = [55, 504] }      # 已实战
+tool_select    = { tap = [55, 615] }
+tool_layers    = { tap = [55, 727] }
+undo           = { tap = [55, 836] }      # 无可撤销时图标呈浅色虚线态
+redo           = { tap = [55, 948] }
+page_overview  = { tap = [55, 1591] }
+tag            = { tap = [55, 1705] }
+menu_more      = { tap = [55, 1816] }     # ⋮
+close_notebook = { tap = [1348, 55] }     # 右上 ✕,退出笔记本 —— Agent 禁用
+
+pen_panel      = { tap = [55, 167], hold = "long", requires = "pen_selected" }     # 已实战
+eraser_panel   = { tap = [55, 504], hold = "long", requires = "eraser_selected" }  # 已实战
+
+# 笔选项面板(pen_panel 打开后;面板区 x 113–511, y 112–1074;
+# 点击选中即生效、面板保持开启;标题文字随选中笔型变化,全部 9 项已实测点击)
+pen_ballpoint   = { tap = [200, 247] }
+pen_fineliner   = { tap = [312, 247] }
+pen_highlighter = { tap = [423, 247] }
+pen_pencil      = { tap = [200, 362] }
+pen_mech_pencil = { tap = [312, 362] }
+pen_calligraphy = { tap = [423, 362] }
+pen_marker      = { tap = [200, 475] }
+pen_shader      = { tap = [312, 475] }
+pen_paintbrush  = { tap = [423, 475] }
+size_thin       = { tap = [200, 697] }   # 每种笔各自记忆粗细(沿用旧版行为,未逐一复测)
+size_medium     = { tap = [312, 697] }
+size_thick      = { tap = [423, 697] }
+color_black     = { tap = [200, 876] }
+color_gray      = { tap = [312, 876] }
+color_white     = { tap = [423, 876] }
+color_blue      = { tap = [200, 985] }
+color_red       = { tap = [312, 985] }
+
+# 橡皮选项面板(eraser_panel 打开后;面板区 x 113–511, y 447–1010)
+eraser_normal    = { tap = [200, 583] }
+eraser_selection = { tap = [312, 583] }
+eraser_size_thin = { tap = [200, 810] }
+eraser_size_med  = { tap = [312, 810] }
+eraser_size_thick = { tap = [423, 810] }
+erase_all        = { tap = [312, 954] }   # "Erase all strokes" 整行按钮;坐标已标定,点击未实测(★待验证)
+
+# ---------- 功能:控件路径("?" = 状态已满足则跳过) ----------
+[ui."3.27.3.0".features]
+select_pen      = ["tool_pen"]                       # 无 toolbar_toggle,工具栏常驻
+select_pen_type = ["tool_pen", "pen_panel", "<pen_type>", "tool_pen"]  # 末步点笔图标关面板
+undo_last       = ["undo"]
+erase_page      = ["tool_eraser", "eraser_panel", "erase_all", "tool_pen"]  # ★erase_all 未实测
+
+# ---------- ⋮ 菜单(menu_more 点击后弹出;竖屏面板区 x 113–511, y 1086–1870)----------
+# 七项自上而下,行距 ~112;"Set to landscape/portrait" 文字随当前朝向切换
+[ui."3.27.3.0".controls.menu]
+convert_to_text   = { tap = [300, 1142] }
+enable_shapes     = { tap = [436, 1254] }   # 开关本体;勿盲点(会改用户设置)
+search            = { tap = [300, 1367] }
+share             = { tap = [300, 1480] }
+set_orientation   = { tap = [300, 1592] }   # 已实战(横竖屏往返验证)
+notebook_settings = { tap = [300, 1704] }
+add_page          = { tap = [300, 1816] }   # ★ 显式加页入口,取代旧版"末页滑动"的过触发方案;点击未实测
+
+# ---------- 横屏(landscape;已实战标定)----------
+# 物理帧缓冲与触摸坐标系不变(仍是竖屏 1404×1872 空间),内容整体旋转:
+#   视图(1872×1404) → 物理:phys_x = view_y;phys_y = 1871 − view_x
+#   触摸注入(物理坐标再做标准 Y 翻转):touch_x = view_y;touch_y = view_x
+#   截图给模型看:竖屏帧逆时针旋 90°(np.rot90(frame, k=-1) 的逆,即 view[vy][vx] = phys[1871−vx][vy])
+# 面板类 UI 完全遵守此旋转(笔面板三地标 + 橡皮面板边框实测误差 ≤1px):
+#   竖屏 controls 里所有 pen_*/size_*/color_*/eraser_* 坐标按上式换算即可,无需重标。
+# ★ 例外(横屏下重新排布,必须用下面的物理坐标):
+[ui."3.27.3.0".landscape_overrides]
+# 工具栏主列(时钟…redo)= 竖屏坐标纯旋转:phys = (view_y, 1815),与公式一致,不列。
+page_overview  = { tap = [1123, 1815] }   # 公式值 (1591,1816) 越界,实际压缩排布
+tag            = { tap = [1237, 1815] }
+menu_more      = { tap = [1348, 1815] }
+close_notebook = { tap = [78, 79] }       # Agent 禁用
+# ⋮ 菜单(横屏面板区 phys x 618–1403, y 1360–1759;行中心 y 用 1560)
+menu_convert_to_text   = { tap = [674, 1560] }
+menu_enable_shapes     = { tap = [786, 1560] }
+menu_search            = { tap = [899, 1560] }
+menu_share             = { tap = [1011, 1560] }
+menu_set_orientation   = { tap = [1124, 1560] }   # 已实战(切回竖屏用的就是它)
+menu_notebook_settings = { tap = [1236, 1560] }
+menu_add_page          = { tap = [1348, 1560] }
+
+# 朝向检测(先探针,后备 .content):
+#   探针 = 工具栏图标密度对比(✕ 图标太细,暗比仅 ~0.05,裕量不足,弃用):
+#     left  = 区域 (x 0..110, y 112..950) 暗比      # 竖屏工具列
+#     bottom = 区域 (x 100..1000, y 1750..1872) 暗比 # 横屏工具条
+#     竖屏:left ≫ bottom(实测 0.94 vs 0.000);横屏:bottom ≫ left(实测 0.138 vs 0.000)
+#     两者都 ≈0 → 工具栏不可见/非笔记视图,降级全帧截图重定位
+#   备用:当前文档 .content JSON 的 "orientation" 字段(xochitl 保存时才更新,有滞后,仅作交叉校验)
+# ★ 朝向是**每个笔记本各自的属性**(实测:换开另一本笔记,朝向随之切换,
+#   journal 出现 rm.orientationmodule "Setting new orientation InvertedLandscape")。
+#   菜单"Set to landscape"对应内部朝向 InvertedLandscape;纯 Landscape(工具条在物理顶边、
+#   ✕ 在右下)未在设备上观测到,如遇到需另行标定。
+#   会话开始与每次翻页/换文档后都必须重新探针确认朝向,绝不缓存。
+
+# ---------- 状态机 ----------
+# S1 工具栏常驻(某工具选中,反色块指示)
+# S1 --tap 其他工具--> S1' (选中迁移;80ms 点按即可)
+# S1(工具X选中) --长按 工具X 图标 600ms--> S2.X 选项面板(顶边框探针可测)
+# S2.X --tap 面板内选项--> S2.X (生效且面板保持,标题文字更新)
+# S2.X --tap 任意工具图标--> S1' (面板关闭;含点击工具X自身)
+# 翻页:横滑注入(非 -btn 亦可):左滑/右滑均实测触发 loadPage;方向语义与页序待 M3 复核
+# 横屏往返:menu_more → set_orientation 双向实测可靠;切换后必须重新探针确认朝向再动作
+# 横屏写回已实战(2026-07-18):SVG 按视图坐标设计 → 预旋转 (x,y)→(y,−x) → 竖屏物理坐标注入,
+#   横屏视图下图形正立(13 笔素描人物,压力包络正常);截帧反变换 view[vy][vx]=phys[1871−vx][vy]
+#   (numpy: view = transpose(phys)[:, ::-1])
+#
+# 实测记录(2026-07-17):
+# - 笔注入(event1,wacom 坐标系与换算公式与 3.11 完全一致)有效;
+#   注意会话开始必须确认笔工具选中——本次实测时用户停在"选择"工具,
+#   注入笔画被解释为圈选(零墨迹零报错),再次验证 M0 教训。
+# - 输入设备枚举不变:event1=Wacom I2C Digitizer,event2=pt_mt,轴范围均不变。
+# - /dev/fb0 可作为"屏幕是否刷新"的示波器:空闲时 md5 稳定,任何可见变化都会改变其内容。
