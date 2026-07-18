@@ -125,6 +125,9 @@ select_pen_size  = ["toolbar_toggle?", "tool_pen", "pen_panel", "<size>", "tool_
 select_pen_color = ["toolbar_toggle?", "tool_pen", "pen_panel", "<color>", "tool_pen"]
 undo_last       = ["toolbar_toggle?", "undo"]
 erase_page      = ["toolbar_toggle?", "tool_eraser", "eraser_panel", "erase_all", "tool_pen"]
+# 显式加页(M3 new_page 工具):⋮ 菜单 → Add page。菜单为瞬态弹层,无专用探针,
+# 依赖 tap_gap 时序盲打;调用方以帧指纹变化验证翻到了新页(menu_add_page 点击★待真机验证)
+add_page        = ["toolbar_toggle?", "menu_more", "menu_add_page"]
 
 # ---------- 横屏(landscape;已实战标定 2026-07-18)----------
 # 物理帧缓冲与触摸坐标系不变(仍是竖屏 1404×1872 空间),内容整体旋转:
