@@ -60,7 +60,16 @@ func (s *session) recordPenState() {
 		slog.Debug("user's pen style unknown", "err", s.penErr)
 		return
 	}
-	slog.Debug("user's pen style recorded", "state", s.pen)
+	// xochitl does not flush the conf on a pen change (on-device test: six
+	// minutes without a write), only on events like closing the notebook. So
+	// this state can lag: a pen picked inside the current notebook visit is
+	// not in it yet, and the restore would bring back the visit-before pen.
+	// Log the age so on-device forensics can spot that case.
+	age := "unknown"
+	if fi, err := os.Stat(penstate.DefaultConfPath); err == nil {
+		age = time.Since(fi.ModTime()).Round(time.Second).String()
+	}
+	slog.Debug("user's pen style recorded", "state", s.pen, "conf_age", age)
 }
 
 // restorePenStyle puts the user's pen back after the model styled it, via the
