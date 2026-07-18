@@ -167,37 +167,44 @@ func runAgentSession(cfg config.Config, client llm.Client, s *session, viewImg *
 		System: system, MaxTurns: maxTurns,
 	}
 
-	// Session etiquette (T2.5): remember the user's tool, put it back after.
+	// Session etiquette (T2.5): remember the user's tool and pen style, put
+	// both back after. The style must be read before the loop runs — the
+	// model's own set_pen taps make xochitl overwrite LastWritingTool.
 	var originalTool string
 	if s != nil && s.ui != nil {
 		s.orientation()
 		originalTool = s.ui.CurrentTool()
 		slog.Debug("user's tool recorded", "tool", originalTool)
+		s.recordPenState()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	start := time.Now()
 	out, err := loop.Run(ctx, initial)
-	if err != nil {
-		if s != nil {
-			s.markError()
-		}
-		return nil, tb, fmt.Errorf("agent: %w", err)
+	if err != nil && s != nil {
+		// Feedback first: the corner mark must not queue behind the restore
+		// taps below (same lesson as markBusy).
+		s.markError()
 	}
 
 	if s != nil && s.ui != nil {
+		// Restore when the model styled the pen, and also when the daemon
+		// forced its configured writing pen (ensurePen): both leave the
+		// user's own pen replaced, so both owe a restore.
+		if tb.styled || s.penStyled {
+			// Style before tool: the panel path leaves the pen selected, so
+			// a non-pen original tool must be re-selected afterwards.
+			s.restorePenStyle()
+		}
 		if originalTool != "" {
 			if err := s.ui.RestoreTool(originalTool); err != nil {
 				slog.Warn("could not restore the user's tool", "tool", originalTool, "err", err)
 			}
 		}
-		if tb.styled {
-			// The pen type/color the model chose persists in xochitl; the
-			// user's exact previous pen is not recorded anywhere we read yet
-			// (M4: .content LastPen). Be honest in the log.
-			slog.Warn("the session changed the pen style and cannot restore the user's exact pen", "left_at", tb.cur)
-		}
+	}
+	if err != nil {
+		return nil, tb, fmt.Errorf("agent: %w", err)
 	}
 
 	slog.Info("session complete",

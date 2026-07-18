@@ -80,6 +80,28 @@ func TestStrokesEventSequence(t *testing.T) {
 	}
 }
 
+func TestEraseAnnouncesRubberNotPen(t *testing.T) {
+	in, pen, _ := testInjector(t)
+	line := geom.Stroke{Points: []geom.Point{{X: 100, Y: 100}, {X: 200, Y: 100}}}
+	if err := in.Erase([]geom.Stroke{line}); err != nil {
+		t.Fatal(err)
+	}
+	evs := decode(t, pen.Bytes())
+
+	rubber := find(evs, evKey, btnToolRubber)
+	if len(rubber) != 2 || rubber[0] != 1 || rubber[1] != 0 {
+		t.Errorf("BTN_TOOL_RUBBER sequence = %v, want [1 0]", rubber)
+	}
+	// Announcing the pen too would leave xochitl guessing which tool this is.
+	if p := find(evs, evKey, btnToolPen); len(p) != 0 {
+		t.Errorf("BTN_TOOL_PEN events = %v, want none", p)
+	}
+	touch := find(evs, evKey, btnTouch)
+	if len(touch) != 2 || touch[0] != 1 || touch[1] != 0 {
+		t.Errorf("BTN_TOUCH sequence = %v, want [1 0]", touch)
+	}
+}
+
 func TestStrokesLandsBeforeTouchingDown(t *testing.T) {
 	in, pen, _ := testInjector(t)
 	if err := in.Strokes([]geom.Stroke{{Points: []geom.Point{{X: 100, Y: 100}, {X: 200, Y: 100}}}}); err != nil {
