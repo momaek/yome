@@ -36,6 +36,9 @@ dist_max_px = 120
 long_press_ms = 1500
 # Optional second confirmation step for in-place mode.
 confirm = false
+# Draw a small single-stroke hourglass in the corner while a session runs
+# (one undo step removes it). Set false for log-only feedback.
+status_mark = true
 
 [layout]
 # Capital letter height in pixels. ~50px gives roughly 550 characters a page.

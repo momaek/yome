@@ -1,12 +1,12 @@
-// The ai command: M2's perceive-and-write session. Screenshot in, model
-// decides, write_text puts the reply back on the page — the maxTurns=1
-// degenerate form of the full agent (plan 5, M2).
+// The ai command: one full perceive-decide-act session. M2 ran it as the
+// maxTurns=1 write_text degenerate form; M3 gives the model the full toolset
+// (read_page/new_page/draw, and erase_page in in-place mode) and the v2
+// prompt. serve triggers exactly this flow from a gesture.
 package main
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"image"
@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/momaek/yome/internal/agent"
@@ -23,6 +22,7 @@ import (
 	"github.com/momaek/yome/internal/geom"
 	"github.com/momaek/yome/internal/layout"
 	"github.com/momaek/yome/internal/llm"
+	"github.com/momaek/yome/internal/trigger"
 )
 
 func runAI(args []string) error {
@@ -31,9 +31,20 @@ func runAI(args []string) error {
 	imagePath := fs.String("image", "", "offline replay: use this PNG instead of the device (implies -dry-run)")
 	instruction := fs.String("instruction", "", "extra instruction to send alongside the screenshot")
 	dry := fs.Bool("dry-run", false, "call the model but print the reply instead of writing it")
-	maxTurns := fs.Int("max-turns", 1, "tool-execution rounds (M2 runs single-shot)")
+	maxTurns := fs.Int("max-turns", 0, "tool-execution rounds (default: config api.max_turns)")
+	mode := fs.String("mode", "new-page", "session mode: new-page or in-place (in-place registers erase_page)")
 	if err := parse(fs, cf, args); err != nil {
 		return err
+	}
+
+	var sessionMode trigger.Mode
+	switch *mode {
+	case "new-page":
+		sessionMode = trigger.NewPage
+	case "in-place":
+		sessionMode = trigger.InPlace
+	default:
+		return fmt.Errorf("%w: -mode must be new-page or in-place, got %q", errUsage, *mode)
 	}
 
 	cfg, err := loadConfigOnly(*cf.config)
@@ -88,42 +99,72 @@ func runAI(args []string) error {
 		area = s.pageArea()
 	}
 
+	turns := *maxTurns
+	if turns <= 0 {
+		turns = cfg.API.MaxTurns
+	}
+	out, tb, err := runAgentSession(cfg, client, s, viewImg, area, sessionMode, dryRun, turns, *instruction)
+	if err != nil {
+		return err
+	}
+
+	if dryRun && tb.lastText != "" {
+		fmt.Printf("--- model reply (%d chars) ---\n%s\n--- typeset: %d lines, %d overflow ---\n",
+			len([]rune(tb.lastText)), tb.lastText, tb.lines, tb.overflow)
+	}
+	if out.FinalText != "" {
+		slog.Info("model closing note", "text", out.FinalText)
+	}
+	return nil
+}
+
+// runAgentSession is the shared heart of ai and serve: prompt assembly, tool
+// assembly, session etiquette, and the loop itself. s is nil offline.
+func runAgentSession(cfg config.Config, client llm.Client, s *session, viewImg *image.Gray, area geom.Rect, mode trigger.Mode, dryRun bool, maxTurns int, instruction string) (*agent.Outcome, *toolbox, error) {
 	face := layout.DefaultFace()
 	capH := cfg.Layout.CapHeightPx
 	free := freeAreaBelowInk(viewImg, area, capH)
 	opt := layout.TextOptions{CapHeightPx: capH, LineSpacing: cfg.Layout.LineSpacing, Area: free}
-	if lines := (free.H) / (capH * layout.MinLineSpacing); lines < 2 {
-		err := fmt.Errorf("only %.0fpx of free space below the ink — not enough to write a reply", free.H)
-		if s != nil {
-			s.markError()
-		}
-		return err
+	fullOpt := opt
+	fullOpt.Area = area
+
+	// A crowded page no longer blocks the session (M2 refused here): the
+	// model can new_page its way to room, and in-place mode erases anyway.
+	if lines := free.H / (capH * layout.MinLineSpacing); lines < 2 {
+		slog.Info("almost no free space below the ink; the model will need new_page", "free_h", free.H)
 	}
 
 	system := agent.SystemPrompt(agent.PromptParams{
 		PageW: viewImg.Bounds().Dx(), PageH: viewImg.Bounds().Dy(),
 		FreeW: int(free.W), FreeH: int(free.H),
-		LatinBudget: layout.PageBudget(face, opt),
-		HanBudget:   layout.HanPageBudget(face, opt),
+		LatinBudget:     layout.PageBudget(face, opt),
+		HanBudget:       layout.HanPageBudget(face, opt),
+		PageLatinBudget: layout.PageBudget(face, fullOpt),
+		PageHanBudget:   layout.HanPageBudget(face, fullOpt),
+		InPlace:         mode == trigger.InPlace,
+		MaxTurns:        maxTurns,
 	})
-	slog.Debug("free area", "rect", free, "latin_budget", layout.PageBudget(face, opt), "han_budget", layout.HanPageBudget(face, opt))
+	slog.Debug("free area", "rect", free, "latin_budget", layout.PageBudget(face, opt))
 
 	var png bytes.Buffer
 	if err := capture.WritePNG(&png, viewImg); err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	tool := &writeTextTool{face: face, opt: opt, s: s, dry: dryRun}
+	tb := &toolbox{s: s, face: face, opt: opt, dry: dryRun}
 	initial := []llm.Part{llm.ImagePart("image/png", png.Bytes())}
-	msg := *instruction
+	msg := instruction
 	if msg == "" {
 		msg = "The user triggered you on this page. Follow your instructions."
+		if mode == trigger.InPlace {
+			msg = "The user triggered you on this page with the IN-PLACE gesture: they want this page erased and rewritten better. Follow your instructions."
+		}
 	}
 	initial = append(initial, llm.TextPart(msg))
 
 	loop := &agent.Loop{
-		Client: client, Tools: []agent.Tool{tool},
-		System: system, MaxTurns: *maxTurns,
+		Client: client, Tools: assembleTools(tb, mode),
+		System: system, MaxTurns: maxTurns,
 	}
 
 	// Session etiquette (T2.5): remember the user's tool, put it back after.
@@ -142,12 +183,20 @@ func runAI(args []string) error {
 		if s != nil {
 			s.markError()
 		}
-		return fmt.Errorf("agent: %w", err)
+		return nil, tb, fmt.Errorf("agent: %w", err)
 	}
 
-	if s != nil && s.ui != nil && originalTool != "" {
-		if err := s.ui.RestoreTool(originalTool); err != nil {
-			slog.Warn("could not restore the user's tool", "tool", originalTool, "err", err)
+	if s != nil && s.ui != nil {
+		if originalTool != "" {
+			if err := s.ui.RestoreTool(originalTool); err != nil {
+				slog.Warn("could not restore the user's tool", "tool", originalTool, "err", err)
+			}
+		}
+		if tb.styled {
+			// The pen type/color the model chose persists in xochitl; the
+			// user's exact previous pen is not recorded anywhere we read yet
+			// (M4: .content LastPen). Be honest in the log.
+			slog.Warn("the session changed the pen style and cannot restore the user's exact pen", "left_at", tb.cur)
 		}
 	}
 
@@ -157,14 +206,7 @@ func runAI(args []string) error {
 	if out.ToolCalls == 0 {
 		slog.Warn("the model wrote nothing", "final_text", out.FinalText)
 	}
-	if dryRun && tool.lastText != "" {
-		fmt.Printf("--- model reply (%d chars) ---\n%s\n--- typeset: %d lines, %d overflow ---\n",
-			len([]rune(tool.lastText)), tool.lastText, tool.lines, tool.overflow)
-	}
-	if out.FinalText != "" {
-		slog.Info("model closing note", "text", out.FinalText)
-	}
-	return nil
+	return out, tb, nil
 }
 
 // preflight verifies the model API is reachable before any page action (T2.6).
@@ -187,70 +229,6 @@ func preflight(cfg config.Config) error {
 	resp.Body.Close()
 	slog.Debug("api preflight ok", "base", base, "status", resp.StatusCode)
 	return nil
-}
-
-// writeTextTool is the M2 write_text: typeset the model's text into the free
-// area and inject it. In dry-run it records instead of writing.
-type writeTextTool struct {
-	face *layout.Face
-	opt  layout.TextOptions
-	s    *session // nil in offline mode
-	dry  bool
-
-	lastText string
-	lines    int
-	overflow int
-}
-
-func (t *writeTextTool) Def() llm.Tool {
-	return llm.Tool{
-		Name:        "write_text",
-		Description: "Write text onto the page below the user's ink, in a handwriting-style pen font. Call it once with the complete reply. Supports Chinese and English; \\n makes a line break.",
-		InputSchema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"lines": {"type": "string", "description": "the full text to write"}
-			},
-			"required": ["lines"]
-		}`),
-	}
-}
-
-func (t *writeTextTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
-	var in struct {
-		Lines string `json:"lines"`
-	}
-	if err := json.Unmarshal(input, &in); err != nil {
-		return "", fmt.Errorf("write_text: bad input: %v", err)
-	}
-	if strings.TrimSpace(in.Lines) == "" {
-		return "", fmt.Errorf("write_text: lines is empty")
-	}
-
-	res := layout.Text(t.face, in.Lines, t.opt)
-	t.lastText = in.Lines
-	t.lines += len(res.Lines)
-	t.overflow += len(res.Overflow)
-
-	if !t.dry {
-		if err := t.s.writeStrokes(res.Strokes, true, true); err != nil {
-			return "", err
-		}
-	} else {
-		slog.Info("dry-run: not writing", "lines", len(res.Lines), "strokes", len(res.Strokes))
-	}
-
-	// Advance the writable area past what was just written, so a second call
-	// (larger turn budgets) continues below instead of over it.
-	used := float64(len(res.Lines)) * t.opt.CapHeightPx * t.opt.LineSpacing
-	t.opt.Area.Y += used
-	t.opt.Area.H -= used
-
-	if len(res.Overflow) > 0 {
-		return fmt.Sprintf("ok: wrote %d lines, but these %d lines did NOT fit and were not written:\n%s",
-			len(res.Lines), len(res.Overflow), strings.Join(res.Overflow, "\n")), nil
-	}
-	return "ok", nil
 }
 
 // loadGrayPNG reads a PNG and converts it to grayscale.

@@ -88,17 +88,17 @@ M1 写回引擎(daemon 骨架)  →  M2 感知+单轮 AI  →  M3 完整 Agent+�
 
 ### 任务
 
-- [ ] **T3.1 trigger 正式化**：迁移双击检测器；手势词汇表（右下角双击=新页模式、双击+长按1.5s=原地模式）；Agent 执行期挂起识别；触发后注入角落状态笔迹（沙漏/×）
-- [ ] **T3.2 read_page 工具**：翻页（swipe 注入）+ 截图 + 翻回；页码指纹校验
-- [ ] **T3.3 draw 工具**：SVG path 参数 → layout → 注入；边界裁剪与尺寸归一化
-- [ ] **T3.4 new_page 工具**：record 真人加页操作确定最小事件序列（一次性实验）；慢速执行 + 逐页校验（页码指纹）
-- [ ] **T3.5 erase_page 工具 + 门控**：仅原地手势会话注册；擦除前 .rm 文件字节级备份；写后验墨
-- [ ] **T3.6 write_text/draw 的 style 参数**：daemon 内部经 ui 图谱自动切换笔型/粗细/颜色
-- [ ] **T3.7 溢出续写协议**：write_text 返回溢出行 → prompt 引导模型 new_page 续写
-- [ ] **T3.8 部署**：systemd unit（After=home.mount xochitl.service, Restart=on-failure）、journald 日志、`make install`、固件升级重装说明
-- [ ] **T3.9 system prompt v2**：任务判断准则（润色/待办/重绘图形/图文混排）、多工具编排示例、每页预算表
+- [x] **T3.1 trigger 正式化**：纯状态机检测器（离机单测）+ 只读 evdev 监听器；双击=新页、双击+长按1.5s=原地（阈值即触发）；会话期 Pause/Resume；沙漏/× 状态笔迹；`trigger` 标定命令
+- [x] **T3.2 read_page 工具**：swipe 翻页 + 截图 + 翻回；整帧 md5 指纹校验（未变=首/末页、翻回不符=警告模型禁写）；tool_result 携图回传（llm 层双适配器扩展）
+- [x] **T3.3 draw 工具**：svg_paths 参数 → ParsePaths → Fit 归一化裁剪 → 注入；目标框可选、缺省流式排版
+- [x] **T3.4 new_page 工具**：~~record 回放~~ 改走 3.27 图谱 ⋮ 菜单显式 Add page（add_page feature，两朝向已标定）+ 帧指纹验证；record 命令保留为备选方案
+- [x] **T3.5 erase_page 工具 + 门控**：仅原地会话注册；`internal/backup` 字节级备份（备份失败即中止擦除）；写后验墨沿用
+- [x] **T3.6 write_text/draw 的 style 参数**：{pen,size,color} 经图谱面板路径切换；排除 highlighter/shader；切换后 tool_settle
+- [x] **T3.7 溢出续写协议**：溢出行随 tool_result 返回 + prompt 引导 new_page 续写；可写区域流动（写入推进、换页重置）
+- [x] **T3.8 部署**：`serve` 常驻模式 + deploy/rm2-ai.service + `make install` 装 unit 并启动 + 固件升级重装说明
+- [x] **T3.9 system prompt v2**：任务判断准则、放置策略、溢出协议、样式成本、原地模式段、双预算表
 
-### 验收
+### 验收（全部待真机；标定前置项见 progress.md M3 节）
 
 - [ ] A：纯设备操作——手写一页 → 角落双击 → 润色文字写入新页
 - [ ] B：手绘潦草流程图 → 手势 → Agent 在新页画出工整版本（draw 工具实战）
@@ -126,6 +126,6 @@ M1 写回引擎(daemon 骨架)  →  M2 感知+单轮 AI  →  M3 完整 Agent+�
 | 项 | 状态 | 处理点 |
 |---|---|---|
 | 写回语言 | ✅ 已拍板：跟随原文语言 | 中文管线并入 M2 |
-| new_page 最小事件序列 | 待一次性实验 | T3.4 |
+| new_page 最小事件序列 | ✅ 改走 ⋮ 菜单显式 Add page（图谱 add_page）；record 实验保留为备选 | menu_add_page 点击待真机验证 |
 | 文本/选择工具面板未测绘 | 低优先 | 需要时补图谱 |
 | openai 适配器的 vision+tool use 细节差异 | 设计已留位 | T2.1 实测 |

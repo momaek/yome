@@ -165,6 +165,50 @@ func (s *session) orientation() ui.Orientation {
 	return s.orient
 }
 
+// invalidateOrientation forces re-detection at the next orientation() call.
+// Orientation is a per-notebook property (3.27 calibration): a resident
+// daemon must re-detect at every session start, never cache across them.
+func (s *session) invalidateOrientation() { s.orientDetected = false }
+
+// ensureNotebookView proves the screen is a writable page by finding the
+// toolbar, and refuses when there is none — the CLI write path may degrade
+// to a portrait assumption (ink verification catches a bad write), but a
+// gesture-triggered session must never inject into the home screen or a
+// menu (2026-07-18 on-device finding: the old fallback happily tapped away
+// on a book view).
+//
+// A missing toolbar can also just mean it is collapsed — xochitl collapses
+// it after a text-tool session even inside a notebook — so before giving
+// up, the toggle is tried in each orientation, using the map's calibrated
+// control (its verify probe doubles as the check that the guess was right).
+func (s *session) ensureNotebookView() error {
+	if s.ui == nil {
+		return fmt.Errorf("no UI map for this firmware: cannot tell a notebook from anything else")
+	}
+	detect := func() bool {
+		o, err := s.ui.DetectOrientation()
+		if err != nil {
+			return false
+		}
+		s.orient, s.orientDetected = o, true
+		return true
+	}
+	if detect() {
+		return nil
+	}
+	for _, o := range []ui.Orientation{ui.Portrait, ui.Landscape} {
+		s.ui.SetOrientation(o)
+		if err := s.ui.Tap("toolbar_toggle"); err != nil {
+			slog.Debug("toolbar toggle attempt failed", "assumed", o.String(), "err", err)
+			continue
+		}
+		if detect() {
+			return nil
+		}
+	}
+	return fmt.Errorf("no toolbar found in either orientation, even after toggle taps: not on a writable page — refusing to act")
+}
+
 // pageArea returns the writable area in the current orientation's view
 // coordinates: strokes are laid out in view space and rotated at write time.
 func (s *session) pageArea() geom.Rect {

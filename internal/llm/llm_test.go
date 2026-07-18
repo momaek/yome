@@ -119,6 +119,42 @@ func TestAnthropicToolResultRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAnthropicToolResultWithImage(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+	c, _ := New(testCfg("anthropic", srv.URL))
+
+	req := Request{Messages: []Message{
+		{Role: "user", Parts: []Part{TextPart("go")}},
+		{Role: "assistant", Parts: []Part{{Type: PartToolUse, ID: "tu1", Name: "read_page", Input: json.RawMessage(`{}`)}}},
+		{Role: "user", Parts: []Part{ToolResultPart("tu1", "page -1", false, ImagePart("image/png", []byte{9, 9}))}},
+	}}
+	if _, err := c.Complete(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	msgs := got["messages"].([]any)
+	tr := msgs[2].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if tr["type"] != "tool_result" || tr["tool_use_id"] != "tu1" {
+		t.Fatalf("tool_result wire form wrong: %v", tr)
+	}
+	// With an image the content must be a part array: [text, image].
+	inner, ok := tr["content"].([]any)
+	if !ok || len(inner) != 2 {
+		t.Fatalf("content should be a 2-part array, got %v", tr["content"])
+	}
+	if inner[0].(map[string]any)["text"] != "page -1" {
+		t.Errorf("text part wrong: %v", inner[0])
+	}
+	src := inner[1].(map[string]any)["source"].(map[string]any)
+	if src["data"] != base64.StdEncoding.EncodeToString([]byte{9, 9}) {
+		t.Errorf("image part wrong: %v", inner[1])
+	}
+}
+
 func TestOpenAIWireFormat(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +228,40 @@ func TestOpenAIToolResultBecomesToolRole(t *testing.T) {
 	last := msgs[len(msgs)-1].(map[string]any)
 	if last["role"] != "tool" || last["tool_call_id"] != "c1" {
 		t.Errorf("tool result should be a tool-role message: %v", last)
+	}
+}
+
+func TestOpenAIToolResultImageBecomesUserMessage(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	defer srv.Close()
+	c, _ := New(testCfg("openai", srv.URL))
+
+	req := Request{Messages: []Message{
+		{Role: "user", Parts: []Part{TextPart("go")}},
+		{Role: "assistant", Parts: []Part{{Type: PartToolUse, ID: "c1", Name: "read_page", Input: json.RawMessage(`{}`)}}},
+		{Role: "user", Parts: []Part{ToolResultPart("c1", "page -1", false, ImagePart("image/png", []byte{9, 9}))}},
+	}}
+	if _, err := c.Complete(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	msgs := got["messages"].([]any)
+	// ...assistant tool_calls, tool result, then the image as a user message.
+	toolMsg := msgs[len(msgs)-2].(map[string]any)
+	if toolMsg["role"] != "tool" || toolMsg["tool_call_id"] != "c1" {
+		t.Errorf("tool message wrong: %v", toolMsg)
+	}
+	imgMsg := msgs[len(msgs)-1].(map[string]any)
+	if imgMsg["role"] != "user" {
+		t.Fatalf("image should follow as a user message, got %v", imgMsg)
+	}
+	content := imgMsg["content"].([]any)
+	url := content[1].(map[string]any)["image_url"].(map[string]any)["url"].(string)
+	if !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Errorf("image url = %s", url)
 	}
 }
 

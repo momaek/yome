@@ -117,6 +117,25 @@ func (c *openaiClient) Complete(ctx context.Context, req Request) (*Response, er
 				toolResults = append(toolResults, oaMessage{
 					Role: "tool", ToolCallID: p.ToolUseID, Content: jsonString(p.Result),
 				})
+				if len(p.Images) > 0 {
+					// The chat-completions tool message cannot carry images, so
+					// they follow as a user message referencing the call.
+					imgParts := []oaContentPart{{Type: "text",
+						Text: fmt.Sprintf("[image(s) returned by tool call %s]", p.ToolUseID)}}
+					for _, img := range p.Images {
+						if img.Type != PartImage {
+							return nil, fmt.Errorf("openai: tool result attachment must be an image, got %q", img.Type)
+						}
+						imgParts = append(imgParts, oaContentPart{Type: "image_url", ImageURL: &oaImageURL{
+							URL: "data:" + img.MediaType + ";base64," + base64.StdEncoding.EncodeToString(img.Data),
+						}})
+					}
+					enc, err := json.Marshal(imgParts)
+					if err != nil {
+						return nil, fmt.Errorf("openai: encode tool image content: %w", err)
+					}
+					toolResults = append(toolResults, oaMessage{Role: "user", Content: enc})
+				}
 			default:
 				return nil, fmt.Errorf("openai: unknown part type %q", p.Type)
 			}

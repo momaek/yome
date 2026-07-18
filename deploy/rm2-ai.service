@@ -1,0 +1,20 @@
+# rm2-ai-daemon — gesture-triggered on-device AI assistant.
+#
+# Firmware updates wipe /etc/systemd/system; after an update, rerun
+# `make install` from the host to put this unit (and the binary) back.
+
+[Unit]
+Description=reMarkable 2 on-device AI assistant
+# The binary and config live under /home; xochitl owns the screen we read
+# and the UI we drive, so start after both.
+After=home.mount xochitl.service
+Wants=xochitl.service
+
+[Service]
+ExecStart=/home/root/rm2-ai-daemon serve
+Restart=on-failure
+RestartSec=3
+# journald keeps the logs; `journalctl -u rm2-ai -f` follows a session live.
+
+[Install]
+WantedBy=multi-user.target

@@ -16,12 +16,19 @@ import (
 	"github.com/momaek/yome/internal/llm"
 )
 
+// Result is what a tool hands back to the model: text, plus optional images
+// (read_page returns the captured screenshot this way).
+type Result struct {
+	Text   string
+	Images []llm.Part
+}
+
 // Tool is one callable surfaced to the model. Run returns the tool_result
 // content; an error becomes an is_error tool result rather than aborting the
 // loop, so the model gets a chance to react.
 type Tool interface {
 	Def() llm.Tool
-	Run(ctx context.Context, input json.RawMessage) (string, error)
+	Run(ctx context.Context, input json.RawMessage) (Result, error)
 }
 
 // Loop drives one session.
@@ -89,7 +96,7 @@ func (l *Loop) Run(ctx context.Context, initial []llm.Part) (*Outcome, error) {
 		for _, u := range uses {
 			result, isErr := l.dispatch(ctx, log, byName, u)
 			out.ToolCalls++
-			results = append(results, llm.ToolResultPart(u.ID, result, isErr))
+			results = append(results, llm.ToolResultPart(u.ID, result.Text, isErr, result.Images...))
 		}
 
 		if round+1 >= maxTurns {
@@ -107,17 +114,17 @@ func (l *Loop) Run(ctx context.Context, initial []llm.Part) (*Outcome, error) {
 
 // dispatch runs one tool call, mapping every failure into a tool_result the
 // model can see.
-func (l *Loop) dispatch(ctx context.Context, log *slog.Logger, byName map[string]Tool, u llm.Part) (string, bool) {
+func (l *Loop) dispatch(ctx context.Context, log *slog.Logger, byName map[string]Tool, u llm.Part) (Result, bool) {
 	t, ok := byName[u.Name]
 	if !ok {
 		log.Warn("model called an unregistered tool", "tool", u.Name)
-		return fmt.Sprintf("unknown tool %q", u.Name), true
+		return Result{Text: fmt.Sprintf("unknown tool %q", u.Name)}, true
 	}
 	log.Info("tool call", "tool", u.Name, "input_bytes", len(u.Input))
 	result, err := t.Run(ctx, u.Input)
 	if err != nil {
 		log.Warn("tool failed", "tool", u.Name, "err", err)
-		return err.Error(), true
+		return Result{Text: err.Error()}, true
 	}
 	return result, false
 }

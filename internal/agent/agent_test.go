@@ -43,12 +43,12 @@ func (e *echoTool) Def() llm.Tool {
 	return llm.Tool{Name: e.name, Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)}
 }
 
-func (e *echoTool) Run(_ context.Context, input json.RawMessage) (string, error) {
+func (e *echoTool) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	e.calls = append(e.calls, string(input))
 	if e.fail != nil {
-		return "", e.fail
+		return Result{}, e.fail
 	}
-	return "ok", nil
+	return Result{Text: "ok"}, nil
 }
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
