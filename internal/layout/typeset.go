@@ -25,23 +25,28 @@ type TextResult struct {
 	Overflow []string      // wrapped lines that did not fit in Area
 }
 
-// Text wraps text at word boundaries and renders the lines that fit inside
-// opt.Area. Lines past the bottom of the area are not rendered; they come back
-// in Overflow for the caller to continue on another page.
+// Text wraps text and renders the lines that fit inside opt.Area. Latin text
+// breaks at word boundaries; Han characters may break anywhere, so mixed and
+// pure-Chinese text wraps naturally. Lines past the bottom of the area are
+// not rendered; they come back in Overflow for the caller to continue on
+// another page.
 //
 // Newlines in text are honoured as hard line breaks. A word longer than the
 // area is broken mid-word rather than dropped.
-func Text(f *Font, text string, opt TextOptions) TextResult {
+func Text(face *Face, text string, opt TextOptions) TextResult {
 	if opt.LineSpacing < MinLineSpacing {
 		opt.LineSpacing = MinLineSpacing
 	}
-	wrapped := Wrap(f, text, opt.CapHeightPx, opt.Area.W)
+	wrapped := Wrap(face, text, opt.CapHeightPx, opt.Area.W)
 
+	// Pure-Latin text should not pay Han headroom, so the metrics only
+	// include the Han box when the text actually uses it.
+	han := face.containsHan(text)
 	lineH := opt.CapHeightPx * opt.LineSpacing
-	descent := f.DescentPx(opt.CapHeightPx)
-	// Ascenders paint above the cap line, so the first line's cap top starts
-	// that much below the area's edge; otherwise 'd' and 'l' cross the margin.
-	top := opt.Area.Y + f.OvershootPx(opt.CapHeightPx)
+	descent := face.DescentPx(opt.CapHeightPx, han)
+	// Ascenders (and taller Han boxes) paint above the cap line, so the first
+	// line starts low enough that nothing crosses the margin.
+	top := opt.Area.Y + face.OvershootPx(opt.CapHeightPx, han)
 
 	var res TextResult
 	for i, line := range wrapped {
@@ -54,7 +59,7 @@ func Text(f *Font, text string, opt TextOptions) TextResult {
 		res.Lines = append(res.Lines, line)
 		penX := opt.Area.X
 		for _, r := range line {
-			strokes, adv := f.RenderRune(r, geom.Point{X: penX, Y: y}, opt.CapHeightPx)
+			strokes, adv := face.RenderRune(r, geom.Point{X: penX, Y: y}, opt.CapHeightPx)
 			res.Strokes = append(res.Strokes, strokes...)
 			penX += adv
 		}
@@ -62,48 +67,108 @@ func Text(f *Font, text string, opt TextOptions) TextResult {
 	return res
 }
 
-// Wrap breaks text into lines no wider than widthPx, splitting at spaces.
-func Wrap(f *Font, text string, capHeightPx, widthPx float64) []string {
+// unit is one unbreakable run of text: a Latin word, or a single Han
+// character. space records whether a breakable space preceded it in the
+// source (dropped when the unit starts a line).
+type unit struct {
+	text  string
+	space bool
+}
+
+// tokenize splits a paragraph into wrap units. Han characters become units of
+// their own — Chinese has no inter-word spaces, so every character boundary
+// is a legal break point.
+func tokenize(face *Face, para string) []unit {
+	var units []unit
+	var word strings.Builder
+	pendingSpace := false
+	wordSpace := false
+
+	flush := func() {
+		if word.Len() > 0 {
+			units = append(units, unit{text: word.String(), space: wordSpace})
+			word.Reset()
+		}
+	}
+	for _, r := range para {
+		switch {
+		case r == ' ' || r == '\t':
+			flush()
+			pendingSpace = true
+		case face.isHan(r):
+			flush()
+			units = append(units, unit{text: string(r), space: pendingSpace})
+			pendingSpace = false
+		default:
+			if word.Len() == 0 {
+				wordSpace = pendingSpace
+				pendingSpace = false
+			}
+			word.WriteRune(r)
+		}
+	}
+	flush()
+	return units
+}
+
+// Wrap breaks text into lines no wider than widthPx.
+func Wrap(face *Face, text string, capHeightPx, widthPx float64) []string {
+	spaceW := face.Advance(' ', capHeightPx)
 	var lines []string
 	for _, para := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		words := strings.Fields(para)
-		if len(words) == 0 {
+		units := tokenize(face, para)
+		if len(units) == 0 {
 			lines = append(lines, "") // preserve blank lines between paragraphs
 			continue
 		}
-		spaceW := f.Advance(' ', capHeightPx)
-		var cur string
+		var cur strings.Builder
 		var curW float64
-		for _, w := range words {
-			for _, piece := range breakLongWord(f, w, capHeightPx, widthPx) {
-				pieceW := f.Measure(piece, capHeightPx)
+		push := func() {
+			lines = append(lines, cur.String())
+			cur.Reset()
+			curW = 0
+		}
+		for _, u := range units {
+			for pi, piece := range breakLongUnit(face, u.text, capHeightPx, widthPx) {
+				pieceW := face.Measure(piece, capHeightPx)
+				withSpace := u.space && pi == 0 && cur.Len() > 0
+				joinW := pieceW
+				if withSpace {
+					joinW += spaceW
+				}
 				switch {
-				case cur == "":
-					cur, curW = piece, pieceW
-				case curW+spaceW+pieceW <= widthPx:
-					cur, curW = cur+" "+piece, curW+spaceW+pieceW
+				case cur.Len() == 0:
+					cur.WriteString(piece)
+					curW = pieceW
+				case curW+joinW <= widthPx:
+					if withSpace {
+						cur.WriteString(" ")
+					}
+					cur.WriteString(piece)
+					curW += joinW
 				default:
-					lines = append(lines, cur)
-					cur, curW = piece, pieceW
+					push()
+					cur.WriteString(piece)
+					curW = pieceW
 				}
 			}
 		}
-		lines = append(lines, cur)
+		push()
 	}
 	return lines
 }
 
-// breakLongWord splits a word that cannot fit on a line by itself. Words that
+// breakLongUnit splits a unit that cannot fit on a line by itself. Units that
 // fit come back unchanged as a single piece.
-func breakLongWord(f *Font, word string, capHeightPx, widthPx float64) []string {
-	if f.Measure(word, capHeightPx) <= widthPx {
-		return []string{word}
+func breakLongUnit(face *Face, text string, capHeightPx, widthPx float64) []string {
+	if face.Measure(text, capHeightPx) <= widthPx {
+		return []string{text}
 	}
 	var pieces []string
 	var cur strings.Builder
 	var curW float64
-	for _, r := range word {
-		w := f.Advance(r, capHeightPx)
+	for _, r := range text {
+		w := face.Advance(r, capHeightPx)
 		if cur.Len() > 0 && curW+w > widthPx {
 			pieces = append(pieces, cur.String())
 			cur.Reset()
@@ -118,13 +183,14 @@ func breakLongWord(f *Font, word string, capHeightPx, widthPx float64) []string 
 	return pieces
 }
 
-// PageBudget is how many characters of typical prose fit in area. It feeds the
-// per-page budget the system prompt hands the model, so it is an estimate:
-// based on the average advance of the printable ASCII range.
-func PageBudget(f *Font, opt TextOptions) int {
+// PageBudget is how many characters of typical Latin prose fit in the area.
+// It feeds the per-page budget the system prompt hands the model, so it is an
+// estimate: based on the average advance of the printable ASCII range.
+func PageBudget(face *Face, opt TextOptions) int {
 	if opt.LineSpacing < MinLineSpacing {
 		opt.LineSpacing = MinLineSpacing
 	}
+	f := face.Latin
 	var total float64
 	var n int
 	for r := ' '; r <= '~'; r++ {
@@ -138,14 +204,30 @@ func PageBudget(f *Font, opt TextOptions) int {
 	}
 	avg := total / float64(n)
 	perLine := int(opt.Area.W / avg)
+	return perLine * budgetLines(face, opt, false)
+}
+
+// HanPageBudget is how many Han characters fit in the area. Zero without a
+// Han table.
+func HanPageBudget(face *Face, opt TextOptions) int {
+	if face.Han == nil {
+		return 0
+	}
+	if opt.LineSpacing < MinLineSpacing {
+		opt.LineSpacing = MinLineSpacing
+	}
+	perLine := int(opt.Area.W / (face.hanScale() * opt.CapHeightPx))
+	return perLine * budgetLines(face, opt, true)
+}
+
+// budgetLines is how many lines fit vertically.
+func budgetLines(face *Face, opt TextOptions, han bool) int {
 	lineH := opt.CapHeightPx * opt.LineSpacing
-	descent := f.DescentPx(opt.CapHeightPx)
-	usable := opt.Area.H - f.OvershootPx(opt.CapHeightPx) - opt.CapHeightPx - descent
+	usable := opt.Area.H - face.OvershootPx(opt.CapHeightPx, han) - opt.CapHeightPx - face.DescentPx(opt.CapHeightPx, han)
 	if usable < 0 {
 		return 0
 	}
-	lines := int(usable/lineH) + 1
-	return perLine * lines
+	return int(usable/lineH) + 1
 }
 
 // FitOptions controls how a drawing is scaled into the page.

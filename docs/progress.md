@@ -9,7 +9,7 @@
 |---|---|
 | M0 通路验证 | ✅ 完成（2026-07-17，真机实测） |
 | M1 写回引擎 + daemon 骨架 | ✅ **完成（2026-07-18 真机验收通过，T1.1–T1.10 全部完成）** |
-| M2 感知 + 单轮 AI | ⬜ 未开工（**卡在"写回语言"决策门**） |
+| M2 感知 + 单轮 AI | 🟡 **代码完成 + mock 全链路真机通过（含中文写回）；真模型验收待 API key 配置** |
 | M3 完整 Agent + 手势 | ⬜ 未开工 |
 | M4 打磨 | ⬜ 未开工 |
 
@@ -169,3 +169,49 @@ m0 工具箱全部有了正式替代;`record` 留给 M3 的 new_page 录制实�
 - 3.11 的 transpose=3 帧方向映射依旧未真机核对(设备已升 3.27,无法回验;代码保留,
   真要跑 3.11 时看首张截图即知,改 `capture.Spec.rawIndex` 一处)。
 - tool_settle_ms=3500 是"够用"值,精确死区窗口未二分标定(3.5s 实测无丢笔)。
+
+---
+
+## M2 — 感知与单轮 AI（2026-07-18）
+
+决策门当日拍板：**写回语言跟随用户手写的原始语言**（中文→中文、英文→英文，模型看图判断）。
+因此中文写回管线从 M4 提前并入本里程碑。
+
+### 已完成
+
+| 任务 | 落点 | 说明 |
+|---|---|---|
+| T2.1 API 抽象层 | `internal/llm` | 统一 messages/tools/vision 内部类型;anthropic(messages)与 openai(chat completions,兼容 vLLM/Ollama)两个薄适配器,裸 net/http 保持静态编译;429/5xx/网络错误退避重试,4xx 不重试;httptest 双向线格式单测 |
+| T2.2 agent 循环 | `internal/agent` | 调 API → tool_use 分发 → 结果回传 → 终止;MaxTurns 为工具执行轮数上限,超限即截断(动作已执行,对话不再续);工具错误转 is_error tool_result 不中断循环 |
+| T2.3 工具注册 | `internal/agent` | 工具表按会话装配;未注册工具安全失败(erase_page 门控的机制基础,有测试钉住) |
+| T2.4 system prompt v1 | `internal/agent/prompt.go` | 设备/画布/剩余空间/双语字符预算动态注入;语言跟随原文;"一次规划一次写入"约束 |
+| T2.5 会话礼仪 | `cmd` + `internal/ui` | CurrentTool 探针记录用户原工具、会话结束恢复;失败注入角落"×"标记(best effort) |
+| T2.6 网络自检 | `cmd/ai.go` | 模型调用前 preflight(5s 超时),失败不碰页面 |
+| **中文写回** | `assets/cjk` + `internal/layout` | makemeahanzi **medians**(中线笔画,天然单线含笔顺)9574 字,自制二进制格式 gzip 后 1.97MB 嵌入;Catmull-Rom 过点平滑消除中线折角;`Face` = Hershey(拉丁) + CJK(汉字)混排:汉字基线对齐(em 内基线 900/1024)、逐字可断行、英文单词整词换行、全角标点降级 ASCII;数据生成器 `tools/gen-cjk` 可复现 |
+| `ai` 命令 | `cmd/ai.go` | capture → 视图旋转 → 剩余空间计算 → 模型 → write_text → 排版注入;`-image` 离线回放(不碰设备)、`-dry-run`、`-max-turns`(默认 1) |
+
+### 真机验证（mock 协议服务替代真模型,其余全真）
+
+Mac 上起 Anthropic 协议 mock(USB 网络 10.11.99.6),设备端 `ai` 完整跑通:
+横屏检测 → 截帧转视图方向 → 剩余空间定位到英文墨迹下方(Y:615) → 记录用户工具(pen) →
+write_text 中英混排 3 行 224 笔画注入(45.2s) → 区域验墨 delta 27095 ✓。
+**中文楷书落墨质量佳**(平滑无折角、基线对齐、字距正常)。
+
+### 开发中发现并处理的问题
+
+- **点阵模板的网格点是纯黑的**(实测 1-2px、值 0),按暗度无法与笔迹区分。
+  剩余空间检测改用**连续游程**判定:行内存在 ≥3px 连续墨段才算内容行,孤立点永远不构成。
+- 横屏截图给模型看必须先做视图旋转(物理帧是侧躺的),离线回放同理——`-image` 需喂视图方向的图。
+- 设备实测同时连着 WiFi(有真实互联网),真模型验收只差 api_key。
+
+### 验收状态
+
+- [x] mock 全链路:截图 → "模型" → write_text → 中文/混排写回真机页面,全程无人工干预
+- [ ] **真模型验收待做**:设备 `/home/root/.config/rm2-ai/config.toml` 填真实 api_key
+  (当前留的是指向开发机 mock 的配置,需替换),手写中文页 → `ai` → 润色写回
+- [ ] openai provider 对自建端点的实测(适配器有单测,线上端点未验)
+
+### 下一步
+
+1. 用户配置真实 API key → 真模型验收(M2 收尾)。
+2. M3:trigger 手势正式化、read_page/new_page/draw 工具、erase_page 门控、systemd 常驻。

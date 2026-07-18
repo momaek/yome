@@ -39,6 +39,20 @@ func decodeFrame(spec Spec, buf []byte) *image.Gray {
 	return img
 }
 
+// ToLandscapeView rotates a physical portrait frame into the landscape view
+// the user sees when the notebook is rotated: view[vy][vx] = phys[H-1-vx][vy]
+// (2026-07-18 calibration). This is what a vision model must be shown for a
+// landscape page — the physical frame would be sideways.
+func ToLandscapeView(phys *image.Gray) *image.Gray {
+	img := image.NewGray(image.Rect(0, 0, ScreenH, ScreenW)) // 1872x1404
+	for vy := 0; vy < ScreenW; vy++ {
+		for vx := 0; vx < ScreenH; vx++ {
+			img.Pix[vy*img.Stride+vx] = phys.Pix[(ScreenH-1-vx)*phys.Stride+vy]
+		}
+	}
+	return img
+}
+
 // CountInk counts pixels darker than BlackThreshold. It is the cheap page
 // fingerprint: blank-page detection, ink verification after a write, and
 // probe assertions all reduce to comparing these counts.

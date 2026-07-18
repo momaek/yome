@@ -64,21 +64,23 @@ M1 写回引擎(daemon 骨架)  →  M2 感知+单轮 AI  →  M3 完整 Agent+�
 
 ### 任务
 
-- [ ] **T2.1 API 抽象层**：统一内部接口（messages + tool defs + tool results + vision 图片）；`provider=anthropic` 与 `provider=openai`（兼容 vLLM/Ollama base_url）两个薄适配器；单轮超时 60s、重试 1 次
-- [ ] **T2.2 agent 循环骨架**：调 API → tool_use 分发 → 结果回传 → 终止条件（maxTurns=8 / 模型结束）；本阶段先锁 maxTurns=1
-- [ ] **T2.3 工具注册机制**：工具表按会话模式装配（为 M3 的 erase_page 门控与 style 参数预留）
-- [ ] **T2.4 system prompt v1**：设备/画布说明、行宽字符预算、"一次规划批量执行"约束、输出语言约定（按写回语言决策）
-- [ ] **T2.5 会话前置/收尾**：强制 select_pen + 记录并恢复用户原工具；失败注入"×"笔迹提示
-- [ ] **T2.6 设备网络自检**：启动时 HTTPS 连通性检查（含系统 CA 验证），失败进日志与状态提示
+- [x] **T2.1 API 抽象层**：统一内部接口（messages + tool defs + tool results + vision 图片）；`provider=anthropic` 与 `provider=openai`（兼容 vLLM/Ollama base_url）两个薄适配器；单轮超时 60s、重试 1 次
+- [x] **T2.2 agent 循环骨架**：调 API → tool_use 分发 → 结果回传 → 终止条件（maxTurns=8 / 模型结束）；本阶段先锁 maxTurns=1
+- [x] **T2.3 工具注册机制**：工具表按会话模式装配（为 M3 的 erase_page 门控与 style 参数预留）
+- [x] **T2.4 system prompt v1**：设备/画布说明、行宽字符预算、"一次规划批量执行"约束、输出语言约定（跟随原文语言）
+- [x] **T2.5 会话前置/收尾**：强制 select_pen + 记录并恢复用户原工具；失败注入"×"笔迹提示
+- [x] **T2.6 设备网络自检**：模型调用前 preflight 连通性检查，失败不碰页面
+- [x] **中文写回管线**（决策门结果并入）：makemeahanzi medians 嵌入 + Face 混排 + 全角标点降级；真机落墨验证
 
 ### 验收
 
-- [ ] 命令行触发：手写一段英文 → 截图上传 → 模型识别并润色 → 结果以笔迹写回新位置，全程无人工干预
+- [x] mock 协议全链路真机通过：截图 → 模型协议 → write_text → 中英混排写回页面，全程无人工干预（2026-07-18）
+- [ ] 真模型验收：设备配置真实 api_key 后重跑（手写中文/英文页 → 润色写回）
 - [ ] anthropic 与 openai 两种 provider 配置均跑通（openai 侧可用任一自建端点验证）
 
 ### 决策门
 
-- [ ] **写回语言拍板**（影响 T2.4 与 M4 中文优先级）
+- [x] **写回语言拍板**（2026-07-18）：**跟随用户手写的原始语言**——中文→中文、英文→英文，由模型按截图判断。中文写回（makemeahanzi medians + SVG 管线）因此纳入 M2 范围
 
 ## 4. M3 — 完整 Agent 与手势触发（4–6 天）
 
@@ -123,7 +125,7 @@ M1 写回引擎(daemon 骨架)  →  M2 感知+单轮 AI  →  M3 完整 Agent+�
 
 | 项 | 状态 | 处理点 |
 |---|---|---|
-| 写回语言 | 待拍板 | M2 决策门 |
+| 写回语言 | ✅ 已拍板：跟随原文语言 | 中文管线并入 M2 |
 | new_page 最小事件序列 | 待一次性实验 | T3.4 |
 | 文本/选择工具面板未测绘 | 低优先 | 需要时补图谱 |
 | openai 适配器的 vision+tool use 细节差异 | 设计已留位 | T2.1 实测 |
