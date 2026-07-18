@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"image"
 	"io"
 	"log/slog"
 	"strings"
@@ -11,11 +12,13 @@ import (
 	"github.com/momaek/yome/internal/geom"
 )
 
-// fakeScreen serves pixels and ink counts from a scripted state.
+// fakeScreen serves pixels, ink counts, and region ratios from a scripted
+// state.
 type fakeScreen struct {
-	dark map[[2]int]bool // sample points that read as dark
-	ink  int
-	err  error
+	dark   map[[2]int]bool             // sample points that read as dark
+	ratios map[image.Rectangle]float64 // scripted region ink ratios
+	ink    int
+	err    error
 	// onRead flips state as taps take effect, letting a test model the UI
 	// responding a moment after a press.
 	reads int
@@ -35,6 +38,14 @@ func (f *fakeScreen) Pixel(x, y int) (uint8, error) {
 func (f *fakeScreen) InkCount() (int, error) {
 	f.reads++
 	return f.ink, f.err
+}
+
+func (f *fakeScreen) InkRatioRect(r image.Rectangle) (float64, error) {
+	f.reads++
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.ratios[r], nil
 }
 
 // fakeTapper records taps and can drive screen state changes.
@@ -378,5 +389,146 @@ func assertTaps(t *testing.T, got, want []geom.Point) {
 		if got[i] != want[i] {
 			t.Errorf("tap %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// --- firmware 3.27 additions: region probes, orientation, landscape ---
+
+// blockVersion is a map slice with 3.27-style region probes and landscape
+// overrides.
+func blockVersion() *Version {
+	return &Version{
+		Meta: Meta{TapMs: 80, TapLongMs: 600, TapGapMinMs: 0, ProbePollMs: 1, ProbeTimeoutMs: 20},
+		Probes: map[string]Probe{
+			"pen_selected":          {Region: []int{0, 112, 110, 222}, Expect: "dark_block"},
+			"region_bad_expect":     {Region: []int{0, 0, 10, 10}, Expect: "dark"},
+			"orientation_portrait":  {Region: []int{0, 112, 110, 950}, Expect: "dark_block", Ratio: ptr(0.05)},
+			"orientation_landscape": {Region: []int{100, 1750, 1000, 1872}, Expect: "dark_block", Ratio: ptr(0.05)},
+		},
+		Controls: map[string]Control{
+			"tool_pen":  {Tap: []int{55, 167}},
+			"menu_more": {Tap: []int{55, 1816}},
+		},
+		LandscapeOverrides: map[string]Control{
+			"menu_more": {Tap: []int{1348, 1815}}, // physical, re-measured
+		},
+		Features: map[string][]string{"select_pen": {"tool_pen"}},
+	}
+}
+
+func TestProbeDarkBlock(t *testing.T) {
+	scr := &fakeScreen{ratios: map[image.Rectangle]float64{
+		image.Rect(0, 112, 110, 222): 0.9, // selected tool: inverted icon block
+	}}
+	e := New(blockVersion(), &fakeTapper{}, scr, quietLogger())
+
+	if ok, err := e.Probe("pen_selected"); err != nil || !ok {
+		t.Errorf("pen_selected over a 0.9-dark block = %v, %v; want true", ok, err)
+	}
+
+	scr.ratios[image.Rect(0, 112, 110, 222)] = 0.1 // deselected: mostly paper
+	if ok, err := e.Probe("pen_selected"); err != nil || ok {
+		t.Errorf("pen_selected over a 0.1-dark block = %v, %v; want false", ok, err)
+	}
+}
+
+func TestProbeRegionRejectsWrongExpect(t *testing.T) {
+	e := New(blockVersion(), &fakeTapper{}, &fakeScreen{}, quietLogger())
+	if _, err := e.Probe("region_bad_expect"); err == nil || !strings.Contains(err.Error(), "dark_block") {
+		t.Errorf("a region probe with expect=dark should demand dark_block, got %v", err)
+	}
+}
+
+func TestDetectOrientation(t *testing.T) {
+	portraitBar := image.Rect(0, 112, 110, 950)
+	landscapeBar := image.Rect(100, 1750, 1000, 1872)
+
+	tests := []struct {
+		name    string
+		ratios  map[image.Rectangle]float64
+		want    Orientation
+		wantErr bool
+	}{
+		// Measured 2026-07-18 on 3.27.3.0.
+		{"portrait", map[image.Rectangle]float64{portraitBar: 0.94, landscapeBar: 0.0}, Portrait, false},
+		{"landscape", map[image.Rectangle]float64{portraitBar: 0.0, landscapeBar: 0.138}, Landscape, false},
+		{"no toolbar anywhere", map[image.Rectangle]float64{portraitBar: 0.0, landscapeBar: 0.0}, Portrait, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := New(blockVersion(), &fakeTapper{}, &fakeScreen{ratios: tc.ratios}, quietLogger())
+			got, err := e.DetectOrientation()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("want an error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("DetectOrientation = %v, want %v", got, tc.want)
+			}
+			if e.Orientation() != tc.want {
+				t.Errorf("engine did not adopt the detected orientation")
+			}
+		})
+	}
+}
+
+func TestDetectOrientationWithoutProbesAssumesPortrait(t *testing.T) {
+	// 3.11 has no landscape calibration; its map must keep working.
+	e := newTestEngine(&fakeScreen{}, &fakeTapper{})
+	got, err := e.DetectOrientation()
+	if err != nil || got != Portrait {
+		t.Errorf("DetectOrientation on a probe-less map = %v, %v; want portrait, nil", got, err)
+	}
+}
+
+func TestLandscapeTapRotatesCoordinates(t *testing.T) {
+	tap := &fakeTapper{}
+	e := New(blockVersion(), tap, &fakeScreen{}, quietLogger())
+	e.SetOrientation(Landscape)
+
+	// Main-column control: pure view rotation, phys = (view_y, 1871-view_x).
+	if err := e.Tap("tool_pen"); err != nil {
+		t.Fatal(err)
+	}
+	if want := (geom.Point{X: 167, Y: 1816}); tap.taps[0] != want {
+		t.Errorf("landscape tool_pen tapped %v, want the rotated %v", tap.taps[0], want)
+	}
+
+	// Overridden control: xochitl re-arranges it, so the measured physical
+	// point wins over the formula (which would land off the toolbar).
+	if err := e.Tap("menu_more"); err != nil {
+		t.Fatal(err)
+	}
+	if want := (geom.Point{X: 1348, Y: 1815}); tap.taps[1] != want {
+		t.Errorf("landscape menu_more tapped %v, want the override %v", tap.taps[1], want)
+	}
+}
+
+func TestLandscapeProbeRotatesRegions(t *testing.T) {
+	// pen_selected region [0,112,110,222] rotates to phys [112,1762,222,1872].
+	scr := &fakeScreen{ratios: map[image.Rectangle]float64{
+		image.Rect(112, 1872-110, 222, 1872): 0.9,
+	}}
+	e := New(blockVersion(), &fakeTapper{}, scr, quietLogger())
+	e.SetOrientation(Landscape)
+
+	if ok, err := e.Probe("pen_selected"); err != nil || !ok {
+		t.Errorf("landscape pen_selected = %v, %v; want true via the rotated region", ok, err)
+	}
+}
+
+func TestPortraitTapIsUntransformed(t *testing.T) {
+	tap := &fakeTapper{}
+	e := New(blockVersion(), tap, &fakeScreen{}, quietLogger())
+	if err := e.Tap("menu_more"); err != nil {
+		t.Fatal(err)
+	}
+	if want := (geom.Point{X: 55, Y: 1816}); tap.taps[0] != want {
+		t.Errorf("portrait menu_more tapped %v, want the calibrated %v", tap.taps[0], want)
 	}
 }

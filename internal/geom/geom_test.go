@@ -109,3 +109,43 @@ func TestClipKeepsEverythingInsideTheBox(t *testing.T) {
 		}
 	}
 }
+
+func TestLandscapeToPortrait(t *testing.T) {
+	tests := []struct {
+		name string
+		view Point
+		phys Point
+	}{
+		// The landscape view's origin (top-left when holding the device
+		// sideways) is the portrait frame's bottom-left corner.
+		{"view origin", Point{0, 0}, Point{0, ScreenH - 1}},
+		{"view top-right", Point{LandscapeW - 1, 0}, Point{0, 0}},
+		{"view bottom-left", Point{0, LandscapeH - 1}, Point{LandscapeH - 1, ScreenH - 1}},
+		// Calibrated landmark: toolbar main column phys = (view_y, ~1815)
+		// for controls at portrait/view x=55 (ui-map-3.27.3.0 landscape note).
+		{"toolbar landmark", Point{55, 167}, Point{167, 1816}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LandscapeToPortrait(tc.view); got != tc.phys {
+				t.Errorf("LandscapeToPortrait(%v) = %v, want %v", tc.view, got, tc.phys)
+			}
+			if back := PortraitToLandscape(tc.phys); back != tc.view {
+				t.Errorf("PortraitToLandscape(%v) = %v, want %v back", tc.phys, back, tc.view)
+			}
+		})
+	}
+}
+
+func TestLandscapeStrokesStayOnScreen(t *testing.T) {
+	// Any point inside the landscape view must land inside the portrait frame.
+	s := []Stroke{{Points: []Point{{0, 0}, {LandscapeW - 1, LandscapeH - 1}, {900, 700}}}}
+	page := FullPage()
+	for _, st := range LandscapeStrokes(s) {
+		for _, p := range st.Points {
+			if !page.Contains(p) {
+				t.Errorf("landscape point mapped off the physical screen: %v", p)
+			}
+		}
+	}
+}

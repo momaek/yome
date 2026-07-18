@@ -44,6 +44,7 @@ func runWriteText(args []string) error {
 	defer s.Close()
 
 	opt := textOptions(s.cfg.Layout, *size, *spacing)
+	opt.Area = s.pageArea() // landscape notebooks get the rotated writable area
 	res := layout.Text(layout.Futural(), body, opt)
 	slog.Info("typeset", "lines", len(res.Lines), "strokes", len(res.Strokes), "overflow_lines", len(res.Overflow))
 
@@ -114,27 +115,29 @@ func runDrawSVG(args []string) error {
 		return fmt.Errorf("%s: %w", *file, err)
 	}
 
-	cfg, err := loadConfigOnly(*cf.config)
-	if err != nil {
-		return err
+	// fitInto applies the flag overrides over the writable area.
+	fitInto := func(area geom.Rect) []geom.Stroke {
+		if *w > 0 {
+			area.W = *w
+		}
+		if *h > 0 {
+			area.H = *h
+		}
+		if *x > 0 {
+			area.X = *x
+		}
+		if *y > 0 {
+			area.Y = *y
+		}
+		return layout.Fit(strokes, layout.FitOptions{Area: area, Scale: *scale})
 	}
-	area := cfg.Layout.Area()
-	if *w > 0 {
-		area.W = *w
-	}
-	if *h > 0 {
-		area.H = *h
-	}
-	if *x > 0 {
-		area.X = *x
-	}
-	if *y > 0 {
-		area.Y = *y
-	}
-	fitted := layout.Fit(strokes, layout.FitOptions{Area: area, Scale: *scale})
-	slog.Info("svg parsed", "paths", len(ds), "strokes", len(fitted))
 
 	if *dry {
+		cfg, err := loadConfigOnly(*cf.config)
+		if err != nil {
+			return err
+		}
+		fitted := fitInto(cfg.Layout.Area())
 		b, _ := geom.Bounds(fitted)
 		fmt.Printf("paths %d  strokes %d  bounds %.0fx%.0f at (%.0f,%.0f)\n", len(ds), len(fitted), b.W, b.H, b.X, b.Y)
 		return nil
@@ -145,6 +148,9 @@ func runDrawSVG(args []string) error {
 		return err
 	}
 	defer s.Close()
+
+	fitted := fitInto(s.pageArea()) // landscape notebooks get the rotated area
+	slog.Info("svg parsed", "paths", len(ds), "strokes", len(fitted))
 
 	start := time.Now()
 	if err := s.writeStrokes(fitted, !*noVerify); err != nil {
@@ -162,12 +168,20 @@ func runCapture(args []string) error {
 		return err
 	}
 
-	fb, err := capture.Open()
+	cfg, err := loadConfigOnly(*cf.config)
+	if err != nil {
+		return err
+	}
+	spec, err := captureSpec(cfg)
+	if err != nil {
+		return err
+	}
+	fb, err := capture.Open(spec)
 	if err != nil {
 		return err
 	}
 	defer fb.Close()
-	slog.Debug("framebuffer located", "pid", fb.PID, "base", fmt.Sprintf("%#x", fb.Base))
+	slog.Debug("framebuffer located", "pid", fb.PID, "base", fmt.Sprintf("%#x", fb.Base), "format", spec.Format)
 
 	img, err := fb.Image()
 	if err != nil {

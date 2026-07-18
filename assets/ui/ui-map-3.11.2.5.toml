@@ -10,6 +10,16 @@ tap_gap_min_ms = 150   # 硬下限:防相邻快击被识别为双击/引发内�
 probe_poll_ms = 150    # 点击后轮询 verify 探针的间隔
 probe_timeout_ms = 2000 # 超时未达期望状态 → 降级全帧截图重定位,绝不继续盲打
 
+
+# ---------- 截帧(M0 实测) ----------
+[ui."3.11.2.5".capture]
+method = "anon_after_fb0" # maps 中 /dev/fb0 映射后的**首个匿名区**
+offset = 8
+format = "u16gray"        # u16le,0=黑 30=白(非 rgb565,与老文档不同)
+width = 1872              # 原始帧为横置
+height = 1404
+rotation = "transpose3"   # 竖屏视图 = 顺时针90° + 垂直翻转
+
 # ---------- 探针:命名状态 → 采样点 + 期望 ----------
 [ui."3.11.2.5".probes]
 toolbar_open   = { at = [55, 155], expect = "dark" }    # 工具位有图标

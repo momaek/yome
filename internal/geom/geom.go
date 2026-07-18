@@ -12,8 +12,47 @@ const (
 	ScreenH = 1872
 )
 
+// Landscape view dimensions: the same panel turned 90°. The physical frame
+// and both input coordinate systems stay portrait; only the rendered content
+// rotates (calibrated 2026-07-18 on firmware 3.27.3.0).
+const (
+	LandscapeW = ScreenH
+	LandscapeH = ScreenW
+)
+
 // Point is a screen-space position in pixels.
 type Point struct{ X, Y float64 }
+
+// LandscapeToPortrait maps a landscape-view point (1872x1404, as content is
+// laid out when the notebook is in landscape) onto the physical portrait
+// frame: phys_x = view_y, phys_y = 1871 - view_x. Injection and probing
+// always happen in physical coordinates; this is the one place the view
+// rotation is applied.
+func LandscapeToPortrait(p Point) Point {
+	return Point{X: p.Y, Y: float64(ScreenH-1) - p.X}
+}
+
+// PortraitToLandscape is the inverse of LandscapeToPortrait.
+func PortraitToLandscape(p Point) Point {
+	return Point{X: float64(ScreenH-1) - p.Y, Y: p.X}
+}
+
+// LandscapeStrokes maps strokes laid out in landscape-view coordinates onto
+// the physical portrait frame for injection.
+func LandscapeStrokes(strokes []Stroke) []Stroke {
+	out := make([]Stroke, len(strokes))
+	for i, s := range strokes {
+		pts := make([]Point, len(s.Points))
+		for j, p := range s.Points {
+			pts[j] = LandscapeToPortrait(p)
+		}
+		out[i] = Stroke{Points: pts}
+	}
+	return out
+}
+
+// LandscapePage is the full canvas in landscape-view coordinates.
+func LandscapePage() Rect { return Rect{0, 0, LandscapeW, LandscapeH} }
 
 // Stroke is one pen-down..pen-up polyline. A stroke with fewer than two
 // points is degenerate and is not injected.

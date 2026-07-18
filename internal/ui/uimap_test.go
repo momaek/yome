@@ -13,13 +13,81 @@ import (
 // The firmware the M0 calibration was measured on.
 const calibratedFirmware = "3.11.2.5"
 
+// The Qt6 firmware, recalibrated 2026-07-17/18.
+const qt6Firmware = "3.27.3.0"
+
 func TestLoadEmbedded(t *testing.T) {
 	m, err := LoadEmbedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.For(calibratedFirmware); err != nil {
-		t.Fatalf("the shipped map lost its %s section: %v", calibratedFirmware, err)
+	for _, fw := range []string{calibratedFirmware, qt6Firmware} {
+		if _, err := m.For(fw); err != nil {
+			t.Errorf("the shipped map lost its %s section: %v", fw, err)
+		}
+	}
+}
+
+// Both shipped maps must carry a capture section: the frame layout rides in
+// the UI map, so a map without one leaves the daemon blind on that firmware.
+func TestEmbeddedMapsCarryCaptureSpecs(t *testing.T) {
+	m, err := LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for fw, v := range m.UI {
+		if v.Capture == nil {
+			t.Errorf("map %s has no [capture] section", fw)
+			continue
+		}
+		if err := v.Capture.Spec().Validate(); err != nil {
+			t.Errorf("map %s capture spec: %v", fw, err)
+		}
+	}
+}
+
+// The 3.27 map's calibrated specifics, pinned so a regressed edit is caught
+// off-device: BGRA frame after the fb0-next region, landscape overrides for
+// the controls xochitl re-arranges, and the orientation probes.
+func TestQt6MapCalibration(t *testing.T) {
+	m, err := LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := m.For(qt6Firmware)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spec := v.Capture.Spec()
+	if spec.Locate != "next_after_fb0" || spec.Offset != 2629640 || spec.Format != "bgra8888" {
+		t.Errorf("capture spec drifted from the 2026-07-17 calibration: %+v", spec)
+	}
+
+	for _, name := range []string{"orientation_portrait", "orientation_landscape"} {
+		p, ok := v.Probes[name]
+		if !ok {
+			t.Errorf("map has no %q probe; DetectOrientation would silently assume portrait", name)
+			continue
+		}
+		if _, ok := p.Rect(); !ok {
+			t.Errorf("probe %q has no region", name)
+		}
+	}
+
+	for _, name := range []string{"page_overview", "tag", "menu_more", "menu_add_page", "menu_set_orientation"} {
+		if _, ok := v.LandscapeOverrides[name]; !ok {
+			t.Errorf("landscape override for %q is missing (formula coords land off the re-arranged toolbar)", name)
+		}
+	}
+
+	// The selected-tool probes must be region probes: a single pixel inside an
+	// icon reads dark whether or not the tool is selected.
+	for _, name := range []string{"pen_selected", "eraser_selected"} {
+		p := v.Probes[name]
+		if _, ok := p.Rect(); !ok || p.Expect != "dark_block" {
+			t.Errorf("probe %q must be a dark_block region probe, got %+v", name, p)
+		}
 	}
 }
 
@@ -66,18 +134,52 @@ func TestEmbeddedMapIsSelfConsistent(t *testing.T) {
 
 			for name, p := range v.Probes {
 				pt, hasPoint := p.Point()
-				if !hasPoint && p.BlackMax == nil {
-					t.Errorf("probe %q has neither `at` nor `black_max`", name)
-					continue
+				r, hasRegion := p.Rect()
+				switch {
+				case p.BlackMax != nil:
+				case hasRegion:
+					if p.Expect != "dark_block" {
+						t.Errorf("region probe %q expects %q, want dark_block", name, p.Expect)
+					}
+					if p.BlockRatio() <= 0 || p.BlockRatio() >= 1 {
+						t.Errorf("probe %q has an unusable ratio %v", name, p.BlockRatio())
+					}
+					full := geom.FullPage()
+					if !full.Contains(geom.Point{X: float64(r.Min.X), Y: float64(r.Min.Y)}) ||
+						!full.Contains(geom.Point{X: float64(r.Max.X - 1), Y: float64(r.Max.Y - 1)}) {
+						t.Errorf("probe %q region %v reaches off the screen", name, r)
+					}
+				case hasPoint:
+					if p.Expect != "dark" && p.Expect != "light" {
+						t.Errorf("probe %q expects %q, want dark or light", name, p.Expect)
+					}
+					if !geom.FullPage().Contains(pt) {
+						t.Errorf("probe %q samples %+v, off the screen", name, pt)
+					}
+				default:
+					t.Errorf("probe %q has no `at`, `region`, or `black_max`", name)
 				}
-				if !hasPoint {
+			}
+
+			for name, c := range v.LandscapeOverrides {
+				pt, ok := c.Point()
+				if !ok {
+					t.Errorf("landscape override %q has no usable tap point: %v", name, c.Tap)
 					continue
-				}
-				if p.Expect != "dark" && p.Expect != "light" {
-					t.Errorf("probe %q expects %q, want dark or light", name, p.Expect)
 				}
 				if !geom.FullPage().Contains(pt) {
-					t.Errorf("probe %q samples %+v, off the screen", name, pt)
+					t.Errorf("landscape override %q taps %+v, off the screen", name, pt)
+				}
+				// Overrides replace calibrated controls; an override for a
+				// control that does not exist is a typo.
+				if _, ok := v.Controls[name]; !ok {
+					t.Errorf("landscape override %q has no portrait control to override", name)
+				}
+			}
+
+			if v.Capture != nil {
+				if err := v.Capture.Spec().Validate(); err != nil {
+					t.Errorf("capture section does not validate: %v", err)
 				}
 			}
 

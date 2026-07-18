@@ -18,22 +18,22 @@ const (
 // 255 and ink is 0, so anything in the lower half is a mark.
 const BlackThreshold = 128
 
-// Image reads a frame and rotates it into the portrait view.
+// Image reads a frame and returns it as the portrait view the user sees,
+// applying the spec's rotation and pixel decoding.
 func (fb *Framebuffer) Image() (*image.Gray, error) {
-	raw, err := fb.Raw()
-	if err != nil {
-		return nil, err
+	buf := make([]byte, fb.spec.FrameBytes())
+	if _, err := fb.mem.ReadAt(buf, int64(fb.Base)); err != nil {
+		return nil, fmt.Errorf("read frame at %#x from pid %d: %w", fb.Base, fb.PID, err)
 	}
-	return Rotate(raw), nil
+	return decodeFrame(fb.spec, buf), nil
 }
 
-// Rotate turns a raw landscape frame into the portrait image the user sees:
-// 90 degrees clockwise plus a vertical flip (ffmpeg transpose=3).
-func Rotate(raw []uint16) *image.Gray {
+// decodeFrame turns a raw frame buffer into the portrait image.
+func decodeFrame(spec Spec, buf []byte) *image.Gray {
 	img := image.NewGray(image.Rect(0, 0, ScreenW, ScreenH))
 	for y := 0; y < ScreenH; y++ {
 		for x := 0; x < ScreenW; x++ {
-			img.Pix[y*img.Stride+x] = toGray(raw[rawIndex(x, y)])
+			img.Pix[y*img.Stride+x] = spec.gray(buf, spec.rawIndex(x, y))
 		}
 	}
 	return img

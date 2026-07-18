@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"log/slog"
 	"sort"
 	"strings"
@@ -20,15 +21,34 @@ type Tapper interface {
 type Screen interface {
 	Pixel(x, y int) (uint8, error)
 	InkCount() (int, error)
+	InkRatioRect(r image.Rectangle) (float64, error)
+}
+
+// Orientation is the notebook's current view rotation. It is a property of
+// each notebook, so it must be re-detected at session start and after every
+// page or document change — never cached across them (3.27 calibration note).
+type Orientation int
+
+const (
+	Portrait Orientation = iota
+	Landscape
+)
+
+func (o Orientation) String() string {
+	if o == Landscape {
+		return "landscape"
+	}
+	return "portrait"
 }
 
 // Engine executes UI features: probe the precondition, tap, verify the
 // transition.
 type Engine struct {
-	ver *Version
-	tap Tapper
-	scr Screen
-	log *slog.Logger
+	ver    *Version
+	tap    Tapper
+	scr    Screen
+	log    *slog.Logger
+	orient Orientation
 }
 
 // New builds an engine for one firmware version's calibration.
@@ -39,7 +59,33 @@ func New(ver *Version, tap Tapper, scr Screen, log *slog.Logger) *Engine {
 	return &Engine{ver: ver, tap: tap, scr: scr, log: log}
 }
 
-// Probe evaluates a named screen state once.
+// SetOrientation tells the engine how the current notebook is rotated. In
+// landscape, calibrated coordinates are treated as view coordinates and
+// rotated onto the physical frame, with landscape_overrides taking precedence
+// for the controls xochitl re-arranges.
+func (e *Engine) SetOrientation(o Orientation) { e.orient = o }
+
+// Orientation returns the engine's current setting (not a fresh detection).
+func (e *Engine) Orientation() Orientation { return e.orient }
+
+// point maps a calibrated view-space point to physical coordinates.
+func (e *Engine) point(p geom.Point) geom.Point {
+	if e.orient == Landscape {
+		return geom.LandscapeToPortrait(p)
+	}
+	return p
+}
+
+// rect maps a calibrated view-space rectangle to physical coordinates.
+func (e *Engine) rect(r image.Rectangle) image.Rectangle {
+	if e.orient == Landscape {
+		return image.Rect(r.Min.Y, geom.ScreenH-r.Max.X, r.Max.Y, geom.ScreenH-r.Min.X)
+	}
+	return r
+}
+
+// Probe evaluates a named screen state once, in the engine's current
+// orientation.
 func (e *Engine) Probe(name string) (bool, error) {
 	p, ok := e.ver.Probes[name]
 	if !ok {
@@ -54,10 +100,22 @@ func (e *Engine) Probe(name string) (bool, error) {
 		return n <= *p.BlackMax, nil
 	}
 
+	if r, ok := p.Rect(); ok {
+		if p.Expect != "dark_block" {
+			return false, fmt.Errorf("probe %q: a region probe's expect must be \"dark_block\", got %q", name, p.Expect)
+		}
+		ratio, err := e.scr.InkRatioRect(e.rect(r))
+		if err != nil {
+			return false, fmt.Errorf("probe %q: %w", name, err)
+		}
+		return ratio > p.BlockRatio(), nil
+	}
+
 	pt, ok := p.Point()
 	if !ok {
-		return false, fmt.Errorf("probe %q has neither an `at` point nor `black_max`", name)
+		return false, fmt.Errorf("probe %q has no `at` point, `region`, or `black_max`", name)
 	}
+	pt = e.point(pt)
 	g, err := e.scr.Pixel(int(pt.X), int(pt.Y))
 	if err != nil {
 		return false, fmt.Errorf("probe %q: %w", name, err)
@@ -70,6 +128,57 @@ func (e *Engine) Probe(name string) (bool, error) {
 		return !dark, nil
 	default:
 		return false, fmt.Errorf("probe %q: expect must be \"dark\" or \"light\", got %q", name, p.Expect)
+	}
+}
+
+// DetectOrientation reads the toolbar's physical position to tell how the
+// current notebook is rotated, and points the engine at the result.
+//
+// It compares the ink ratio of two *physical* regions (the portrait toolbar
+// column on the left edge vs the landscape toolbar row along the bottom),
+// named by the orientation_portrait / orientation_landscape probes. These
+// regions are absolute — they are read directly, never view-rotated.
+// Calibrated 3.27.3.0: portrait 0.94 vs 0.000, landscape 0.138 vs 0.000.
+//
+// Maps without these probes (3.11 has no landscape support) report Portrait.
+func (e *Engine) DetectOrientation() (Orientation, error) {
+	pp, okP := e.ver.Probes["orientation_portrait"]
+	pl, okL := e.ver.Probes["orientation_landscape"]
+	if !okP || !okL {
+		e.log.Debug("map has no orientation probes; assuming portrait")
+		e.orient = Portrait
+		return Portrait, nil
+	}
+	rp, ok := pp.Rect()
+	if !ok {
+		return Portrait, fmt.Errorf("probe orientation_portrait has no region")
+	}
+	rl, ok := pl.Rect()
+	if !ok {
+		return Portrait, fmt.Errorf("probe orientation_landscape has no region")
+	}
+	ratioP, err := e.scr.InkRatioRect(rp)
+	if err != nil {
+		return Portrait, fmt.Errorf("orientation: %w", err)
+	}
+	ratioL, err := e.scr.InkRatioRect(rl)
+	if err != nil {
+		return Portrait, fmt.Errorf("orientation: %w", err)
+	}
+	e.log.Debug("orientation probe", "portrait_ratio", ratioP, "landscape_ratio", ratioL)
+
+	minRatio := pp.BlockRatio() // both probes carry the same floor
+	switch {
+	case ratioP >= minRatio && ratioP > 2*ratioL:
+		e.orient = Portrait
+		return Portrait, nil
+	case ratioL >= minRatio && ratioL > 2*ratioP:
+		e.orient = Landscape
+		return Landscape, nil
+	default:
+		return Portrait, fmt.Errorf(
+			"toolbar not found in either orientation (portrait ratio %.3f, landscape %.3f): not in a notebook view, or the UI has changed — recapture before acting",
+			ratioP, ratioL)
 	}
 }
 
@@ -96,6 +205,22 @@ func (e *Engine) WaitProbe(name string) error {
 	}
 }
 
+// controlPoint resolves a control's physical tap point in the current
+// orientation: a landscape override wins (already physical, measured);
+// everything else is the pure view rotation (calibrated ≤1px on 3.27).
+func (e *Engine) controlPoint(name string, c Control) (geom.Point, bool) {
+	if e.orient == Landscape {
+		if o, ok := e.ver.LandscapeOverrides[name]; ok {
+			return o.Point()
+		}
+	}
+	pt, ok := c.Point()
+	if !ok {
+		return geom.Point{}, false
+	}
+	return e.point(pt), true
+}
+
 // Tap presses a named control, checking its precondition first and its
 // postcondition after.
 func (e *Engine) Tap(name string) error {
@@ -103,7 +228,7 @@ func (e *Engine) Tap(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown control %q", name)
 	}
-	pt, ok := c.Point()
+	pt, ok := e.controlPoint(name, c)
 	if !ok {
 		return fmt.Errorf("control %q has no `tap` point", name)
 	}
