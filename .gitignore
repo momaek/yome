@@ -1,2 +1,9 @@
+# build output
+build/
+
+# M0 scaffolding binaries (the tools stay, the artifacts do not)
 m0/m0-arm
 m0/m0-local
+
+# local captures
+*.png

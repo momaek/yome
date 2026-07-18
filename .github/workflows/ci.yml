@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Formatting
+        run: |
+          out=$(gofmt -l . | grep -v '^m0/' || true)
+          if [ -n "$out" ]; then
+            echo "these files need gofmt:"; echo "$out"; exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+  build:
+    # The device is armv7l. Cross-compiling in CI catches anything that only
+    # builds on the developer's machine — the build tags around evdev, most of
+    # all, since those paths never run in tests.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Cross-compile for the reMarkable 2
+        run: make build
+
+      - name: Check it really is a static ARM binary
+        run: |
+          file build/rm2-ai-daemon
+          file build/rm2-ai-daemon | grep -q 'ARM' || { echo "not an ARM binary"; exit 1; }
+          file build/rm2-ai-daemon | grep -q 'statically linked' || { echo "not static"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rm2-ai-daemon-arm
+          path: build/rm2-ai-daemon
+          if-no-files-found: error
