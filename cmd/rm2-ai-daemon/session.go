@@ -165,6 +165,11 @@ func (s *session) orientation() ui.Orientation {
 	return s.orient
 }
 
+// invalidateOrientation forces re-detection at the next orientation() call.
+// Orientation is a per-notebook property (3.27 calibration): a resident
+// daemon must re-detect at every session start, never cache across them.
+func (s *session) invalidateOrientation() { s.orientDetected = false }
+
 // pageArea returns the writable area in the current orientation's view
 // coordinates: strokes are laid out in view space and rotated at write time.
 func (s *session) pageArea() geom.Rect {

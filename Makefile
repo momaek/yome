@@ -63,9 +63,8 @@ deploy: build
 	scp $(SSH_OPTS) $(BUILD)/$(BINARY) $(DEVICE):$(REMOTE_BIN)
 	@echo "deployed to $(DEVICE):$(REMOTE_BIN)"
 
-## install: deploy the binary and seed the config
-##   The systemd unit lands in M3 (T3.8), together with the `serve` daemon mode;
-##   until then the binary is driven by its foreground debug commands.
+## install: deploy the binary, seed the config, install and start the daemon
+##   Firmware updates wipe the unit; rerun `make install` afterwards.
 install: deploy
 	ssh $(SSH_OPTS) $(DEVICE) 'mkdir -p $(REMOTE_CONF)'
 	@if ssh $(SSH_OPTS) $(DEVICE) 'test -f $(REMOTE_CONF)/config.toml'; then \
@@ -74,10 +73,13 @@ install: deploy
 		scp $(SSH_OPTS) deploy/config.example.toml $(DEVICE):$(REMOTE_CONF)/config.toml; \
 		echo "seeded $(REMOTE_CONF)/config.toml — add your API key"; \
 	fi
-	@echo "installed. try: ssh $(DEVICE) $(REMOTE_BIN) capture -out /tmp/page.png"
+	scp $(SSH_OPTS) deploy/rm2-ai.service $(DEVICE):/etc/systemd/system/rm2-ai.service
+	ssh $(SSH_OPTS) $(DEVICE) 'systemctl daemon-reload && systemctl enable rm2-ai && systemctl restart rm2-ai'
+	@echo "daemon running. logs: ssh $(DEVICE) journalctl -u rm2-ai -f"
 
-## uninstall: remove the binary (the config is left alone)
+## uninstall: stop the daemon, remove unit and binary (the config is left alone)
 uninstall:
+	-ssh $(SSH_OPTS) $(DEVICE) 'systemctl disable --now rm2-ai 2>/dev/null; rm -f /etc/systemd/system/rm2-ai.service; systemctl daemon-reload'
 	ssh $(SSH_OPTS) $(DEVICE) 'rm -f $(REMOTE_BIN)'
 
 ## clean: remove build output

@@ -28,7 +28,8 @@ var commands []command
 
 func init() {
 	commands = []command{
-		{"ai", "look at the page, decide, and write the reply back (M2)", runAI},
+		{"serve", "resident daemon: gesture-triggered AI sessions (M3)", runServe},
+		{"ai", "one perceive-decide-act session from the command line", runAI},
 		{"trigger", "print recognised corner gestures (calibration)", runTrigger},
 		{"write-text", "typeset text and write it on the current page", runWriteText},
 		{"draw-svg", "flatten an SVG's paths and draw them", runDrawSVG},

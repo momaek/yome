@@ -59,6 +59,7 @@ type Gesture struct {
 	DistMaxPx   float64 `toml:"dist_max_px"`   // max travel between the taps
 	LongPressMs int     `toml:"long_press_ms"` // second tap held this long = in-place mode
 	Confirm     bool    `toml:"confirm"`       // optional two-stage armed confirmation
+	StatusMark  bool    `toml:"status_mark"`   // draw the corner hourglass while a session runs
 }
 
 // Rect returns the trigger zone.
@@ -157,6 +158,7 @@ func Default() Config {
 			DistMaxPx:   120,
 			LongPressMs: 1500,
 			Confirm:     false,
+			StatusMark:  true,
 		},
 		Layout: Layout{
 			CapHeightPx: 50,
