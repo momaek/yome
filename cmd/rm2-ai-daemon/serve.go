@@ -56,6 +56,12 @@ func runServe(args []string) error {
 	}
 	defer l.Close()
 
+	e, err := openEraser(cfg)
+	if err != nil {
+		return err
+	}
+	defer e.Close()
+
 	z := cfg.Gesture.Rect()
 	slog.Info("serving gestures",
 		"zone", fmt.Sprintf("x %.0f-%.0f y %.0f-%.0f", z.X, z.Right(), z.Y, z.Bottom()),
@@ -66,11 +72,21 @@ func runServe(args []string) error {
 	for {
 		select {
 		case g := <-l.Gestures():
-			// The session injects touch events on the device this listener
-			// reads; recognition stays paused until the session is over.
+			// The session injects touch and pen events on the devices these
+			// listeners read; both stay paused until the session is over.
 			l.Pause()
+			e.Pause()
 			serveSession(cfg, client, s, g)
+			e.Resume()
 			l.Resume()
+		case es := <-e.Strokes():
+			// Capture only for now: the log is the on-device proof that the
+			// Marker's eraser is seen, and the bbox is what a future consumer
+			// (e.g. telling the agent which region the user erased) needs.
+			slog.Info("erase",
+				"bbox", fmt.Sprintf("x %.0f-%.0f y %.0f-%.0f", es.BBox.X, es.BBox.Right(), es.BBox.Y, es.BBox.Bottom()),
+				"points", es.Points,
+				"duration", es.End.Sub(es.Start).Round(time.Millisecond).String())
 		case got := <-sig:
 			slog.Info("shutting down", "signal", got.String())
 			return nil

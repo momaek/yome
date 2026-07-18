@@ -36,6 +36,7 @@ func init() {
 		{"capture", "save a screenshot of the current page", runCapture},
 		{"ui-run", "execute a UI feature from the map", runUIRun},
 		{"erase-page", "clear the current page (destructive)", runErasePage},
+		{"erase-stroke", "scrub the synthetic eraser along a line (calibration)", runEraseStroke},
 		{"probe", "evaluate a UI probe against the screen", runProbe},
 		{"tap", "tap the touchscreen at a physical screen point", runTap},
 		{"record", "dump raw events from an input device", runRecord},

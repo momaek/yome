@@ -6,6 +6,9 @@
 // The detector is a pure state machine over settled touch frames, so every
 // timing rule is unit-testable off-device. Reading the touchscreen and feeding
 // frames in lives in listener.go.
+//
+// The package also captures pen-eraser strokes from the Wacom digitizer
+// (eraser.go) — not a session trigger, but the same read-only evdev idiom.
 package trigger
 
 import (
