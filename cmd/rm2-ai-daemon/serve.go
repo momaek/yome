@@ -120,6 +120,9 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 	s.invalidateOrientation()
 	if err := s.ensureNotebookView(); err != nil {
 		slog.Warn("gesture ignored", "err", err)
+		// The busy mark is already ink; leaving it behind reads as a hang
+		// (first live gesture: "it's still loading" was a stranded ⧖).
+		s.clearBusyMark()
 		return
 	}
 
@@ -180,5 +183,41 @@ func (s *session) markBusy(at geom.Point) {
 	}}}
 	if err := s.in.Strokes(strokes); err != nil {
 		slog.Warn("could not draw the busy mark", "err", err)
+		return
+	}
+	s.busyMark = geom.Rect{X: x0, Y: y0, W: size, H: size}
+	// Injected touch is dead to xochitl for a few seconds now; the notebook
+	// gate's toggle taps wait this out (same window as tool_settle_ms, just
+	// mirrored — pen first, touch after).
+	s.penQuietUntil = time.Now().Add(s.cfg.Inject.ToolSettle())
+}
+
+// clearBusyMark rubs out the hourglass with the synthetic eraser — raw
+// injection like the mark itself, so it needs no toolbar and works whatever
+// tool is selected. Called only on the refusal path: an abandoned ⧖ is
+// indistinguishable from a hang. On a non-canvas screen (home, menus) both
+// the mark and the erase were no-ops, so calling it unconditionally is safe.
+// The gate's toggle taps may have just opened xochitl's discard window for
+// pen input (tool_settle_ms), which the rubber shares — wait it out first.
+func (s *session) clearBusyMark() {
+	if s.busyMark.W == 0 {
+		return
+	}
+	m := s.busyMark
+	s.busyMark = geom.Rect{}
+	time.Sleep(s.cfg.Inject.ToolSettle())
+	// A serpentine of horizontal passes 12px apart: dense enough to cover
+	// the 36px glyph even with xochitl's thinnest eraser band.
+	var pts []geom.Point
+	left, right := m.X-8, m.Right()+8
+	for i, y := 0, m.Y-6; y <= m.Bottom()+6; i, y = i+1, y+12 {
+		if i%2 == 0 {
+			pts = append(pts, geom.Point{X: left, Y: y}, geom.Point{X: right, Y: y})
+		} else {
+			pts = append(pts, geom.Point{X: right, Y: y}, geom.Point{X: left, Y: y})
+		}
+	}
+	if err := s.in.Erase([]geom.Stroke{{Points: pts}}); err != nil {
+		slog.Warn("could not erase the busy mark", "err", err)
 	}
 }

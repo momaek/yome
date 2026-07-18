@@ -42,6 +42,17 @@ type session struct {
 	orientDetected bool
 	penStyled      bool // configured pen style already forced this session
 
+	// penQuietUntil is when xochitl will accept injected touch again after a
+	// raw pen injection (the busy mark). Mirror of the toolbar-tap → pen
+	// discard window: on-device 2026-07-18, toggle taps fired right after the
+	// hourglass stroke were swallowed wholesale, so the gate refused a
+	// perfectly writable page. Touch taps must wait this out.
+	penQuietUntil time.Time
+	// busyMark is where markBusy inked the hourglass (zero when none was
+	// drawn), so a refused session can rub it out instead of leaving what
+	// looks like an eternal loading state.
+	busyMark geom.Rect
+
 	pen     penstate.State
 	penErr  error
 	penRead bool
@@ -247,6 +258,17 @@ func (s *session) ensureNotebookView() error {
 	}
 	if detect() {
 		return nil
+	}
+	// The toggle tap is injected touch, and a raw pen injection (the busy
+	// mark) has just preceded it: xochitl ignores synthetic touch for a few
+	// seconds after pen activity, exactly like its pen-discard window after
+	// a toolbar tap. Tap into that window and both toggle attempts vanish
+	// without a trace (on-device 2026-07-18). Probes are pure reads and need
+	// no such wait — only the taps do.
+	if wait := time.Until(s.penQuietUntil); wait > 0 {
+		slog.Debug("waiting out xochitl's post-pen touch rejection before toggle taps",
+			"wait", wait.Round(time.Millisecond))
+		time.Sleep(wait)
 	}
 	for _, o := range []ui.Orientation{ui.Portrait, ui.Landscape} {
 		s.ui.SetOrientation(o)

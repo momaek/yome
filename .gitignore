@@ -8,8 +8,8 @@ m0/m0-local
 # local captures
 *.png
 
-# compiled daemon binary (build artifact)
-rm2-ai-daemon
+# compiled daemon binary (build artifact); anchored so cmd/rm2-ai-daemon stays tracked
+/rm2-ai-daemon
 
 # Claude Code local files
 .claude/
