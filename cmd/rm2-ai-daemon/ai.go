@@ -216,15 +216,15 @@ func (t *writeTextTool) Def() llm.Tool {
 	}
 }
 
-func (t *writeTextTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *writeTextTool) Run(ctx context.Context, input json.RawMessage) (agent.Result, error) {
 	var in struct {
 		Lines string `json:"lines"`
 	}
 	if err := json.Unmarshal(input, &in); err != nil {
-		return "", fmt.Errorf("write_text: bad input: %v", err)
+		return agent.Result{}, fmt.Errorf("write_text: bad input: %v", err)
 	}
 	if strings.TrimSpace(in.Lines) == "" {
-		return "", fmt.Errorf("write_text: lines is empty")
+		return agent.Result{}, fmt.Errorf("write_text: lines is empty")
 	}
 
 	res := layout.Text(t.face, in.Lines, t.opt)
@@ -234,7 +234,7 @@ func (t *writeTextTool) Run(ctx context.Context, input json.RawMessage) (string,
 
 	if !t.dry {
 		if err := t.s.writeStrokes(res.Strokes, true, true); err != nil {
-			return "", err
+			return agent.Result{}, err
 		}
 	} else {
 		slog.Info("dry-run: not writing", "lines", len(res.Lines), "strokes", len(res.Strokes))
@@ -247,10 +247,10 @@ func (t *writeTextTool) Run(ctx context.Context, input json.RawMessage) (string,
 	t.opt.Area.H -= used
 
 	if len(res.Overflow) > 0 {
-		return fmt.Sprintf("ok: wrote %d lines, but these %d lines did NOT fit and were not written:\n%s",
-			len(res.Lines), len(res.Overflow), strings.Join(res.Overflow, "\n")), nil
+		return agent.Result{Text: fmt.Sprintf("ok: wrote %d lines, but these %d lines did NOT fit and were not written:\n%s",
+			len(res.Lines), len(res.Overflow), strings.Join(res.Overflow, "\n"))}, nil
 	}
-	return "ok", nil
+	return agent.Result{Text: "ok"}, nil
 }
 
 // loadGrayPNG reads a PNG and converts it to grayscale.

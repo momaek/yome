@@ -43,6 +43,7 @@ type Part struct {
 	// PartToolResult (us -> model)
 	ToolUseID string
 	Result    string
+	Images    []Part // optional image parts returned with the result (read_page)
 	IsError   bool
 }
 
@@ -54,9 +55,11 @@ func ImagePart(mediaType string, data []byte) Part {
 	return Part{Type: PartImage, MediaType: mediaType, Data: data}
 }
 
-// ToolResultPart builds a tool result for a prior tool_use ID.
-func ToolResultPart(id, result string, isErr bool) Part {
-	return Part{Type: PartToolResult, ToolUseID: id, Result: result, IsError: isErr}
+// ToolResultPart builds a tool result for a prior tool_use ID. Optional image
+// parts ride along with the text — the channel a tool like read_page uses to
+// show the model another page.
+func ToolResultPart(id, result string, isErr bool, images ...Part) Part {
+	return Part{Type: PartToolResult, ToolUseID: id, Result: result, Images: images, IsError: isErr}
 }
 
 // Message is one conversation turn.

@@ -44,7 +44,7 @@ type anthPart struct {
 	Input json.RawMessage `json:"input,omitempty"`
 
 	ToolUseID string `json:"tool_use_id,omitempty"`
-	Content   string `json:"content,omitempty"`
+	Content   any    `json:"content,omitempty"` // string, or []anthPart when images ride along
 	IsError   bool   `json:"is_error,omitempty"`
 }
 
@@ -94,7 +94,23 @@ func (c *anthropicClient) Complete(ctx context.Context, req Request) (*Response,
 			case PartToolUse:
 				am.Content = append(am.Content, anthPart{Type: "tool_use", ID: p.ID, Name: p.Name, Input: p.Input})
 			case PartToolResult:
-				am.Content = append(am.Content, anthPart{Type: "tool_result", ToolUseID: p.ToolUseID, Content: p.Result, IsError: p.IsError})
+				tr := anthPart{Type: "tool_result", ToolUseID: p.ToolUseID, IsError: p.IsError}
+				if len(p.Images) == 0 {
+					tr.Content = p.Result
+				} else {
+					// With images the content becomes a part array.
+					inner := []anthPart{{Type: "text", Text: p.Result}}
+					for _, img := range p.Images {
+						if img.Type != PartImage {
+							return nil, fmt.Errorf("anthropic: tool result attachment must be an image, got %q", img.Type)
+						}
+						inner = append(inner, anthPart{Type: "image", Source: &anthImageSource{
+							Type: "base64", MediaType: img.MediaType, Data: base64.StdEncoding.EncodeToString(img.Data),
+						}})
+					}
+					tr.Content = inner
+				}
+				am.Content = append(am.Content, tr)
 			default:
 				return nil, fmt.Errorf("anthropic: unknown part type %q", p.Type)
 			}

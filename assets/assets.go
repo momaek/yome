@@ -12,6 +12,12 @@ import (
 //go:embed hershey/futural.jhf
 var FuturalJHF string
 
+// ScriptSimplexJHF is the Hershey Script Simplex (scripts) single-stroke
+// cursive font in JHF format, the default Latin hand.
+//
+//go:embed hershey/scripts.jhf
+var ScriptSimplexJHF string
+
 // UIMaps holds one TOML UI map per calibrated firmware version, under ui/.
 // These are defaults; a config file may override any section.
 //

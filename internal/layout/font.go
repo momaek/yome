@@ -30,19 +30,37 @@ type Font struct {
 	maxY    float64 // lowest point of any glyph, for descender clearance
 }
 
-var futural *Font
+var (
+	futural       *Font
+	scriptSimplex *Font
+)
 
-// Futural returns the embedded Hershey Simplex font. It panics if the embedded
-// data fails to parse, which would be a build-time defect.
+// Futural returns the embedded Hershey Simplex font, kept as a plainer
+// fallback to the default cursive hand.
 func Futural() *Font {
 	if futural == nil {
-		f, err := ParseJHF(assets.FuturalJHF)
-		if err != nil {
-			panic(fmt.Sprintf("layout: embedded futural.jhf is corrupt: %v", err))
-		}
-		futural = f
+		futural = mustParseJHF("futural.jhf", assets.FuturalJHF)
 	}
 	return futural
+}
+
+// ScriptSimplex returns the embedded Hershey Script Simplex font, the
+// single-stroke cursive used as the default Latin hand.
+func ScriptSimplex() *Font {
+	if scriptSimplex == nil {
+		scriptSimplex = mustParseJHF("scripts.jhf", assets.ScriptSimplexJHF)
+	}
+	return scriptSimplex
+}
+
+// mustParseJHF panics on parse failure, which for embedded data would be a
+// build-time defect.
+func mustParseJHF(name, data string) *Font {
+	f, err := ParseJHF(data)
+	if err != nil {
+		panic(fmt.Sprintf("layout: embedded %s is corrupt: %v", name, err))
+	}
+	return f
 }
 
 // ParseJHF reads Hershey JHF font data.
