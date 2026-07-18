@@ -52,7 +52,35 @@ func assembleTools(tb *toolbox, mode trigger.Mode) []agent.Tool {
 			tools = append(tools, &erasePageTool{tb})
 		}
 	}
+	if tb.s != nil && tb.s.statusOn {
+		for i, t := range tools {
+			tools[i] = &statusTool{Tool: t, s: tb.s}
+		}
+	}
 	return tools
+}
+
+// statusTool wraps a tool so the bottom status line tracks the session's
+// phase: the tool's own label while it runs, back to "thinking" when it
+// returns (the next model call is what follows). Pure decoration — results
+// and errors pass through untouched.
+type statusTool struct {
+	agent.Tool
+	s *session
+}
+
+func (t *statusTool) Run(ctx context.Context, input json.RawMessage) (agent.Result, error) {
+	name := t.Tool.Def().Name
+	if name == "new_page" {
+		// Leaving the current page: erase the line now or it is stranded
+		// there — the post-run rewrite lands on the new page.
+		t.s.clearStatus()
+	} else if label, ok := statusLabels[name]; ok {
+		t.s.setStatus(label)
+	}
+	res, err := t.Tool.Run(ctx, input)
+	t.s.setStatus(statusThinking)
+	return res, err
 }
 
 // ---- style -----------------------------------------------------------------

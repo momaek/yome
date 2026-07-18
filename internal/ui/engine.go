@@ -49,6 +49,14 @@ type Engine struct {
 	scr    Screen
 	log    *slog.Logger
 	orient Orientation
+
+	// BeforeTouch, when set, runs right before every injected tap. It exists
+	// for one reason: xochitl ignores synthetic touch for a few seconds after
+	// a pen injection (2026-07-18 on-device: the busy-mark stroke made the
+	// notebook gate's toggle taps vanish), and the session layer knows when
+	// the last pen activity was — the engine does not. Probes are pure frame
+	// reads and never wait.
+	BeforeTouch func()
 }
 
 // New builds an engine for one firmware version's calibration.
@@ -246,6 +254,9 @@ func (e *Engine) Tap(name string) error {
 	hold := e.ver.Meta.Tap()
 	if c.Hold == "long" {
 		hold = e.ver.Meta.TapLong()
+	}
+	if e.BeforeTouch != nil {
+		e.BeforeTouch()
 	}
 	e.log.Debug("ui tap", "control", name, "at", []float64{pt.X, pt.Y}, "hold", hold)
 	if err := e.tap.Tap(pt, hold); err != nil {
