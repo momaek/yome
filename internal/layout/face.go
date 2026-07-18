@@ -36,9 +36,9 @@ var (
 	defaultFace     *Face
 )
 
-// DefaultFace is the embedded Script Simplex cursive plus the embedded Han
-// table. A corrupt Han asset degrades to Latin-only with a warning rather
-// than failing: English writing should not depend on the Chinese data.
+// DefaultFace is the embedded Futural font plus the embedded Han table. A
+// corrupt Han asset degrades to Latin-only with a warning rather than
+// failing: English writing should not depend on the Chinese data.
 func DefaultFace() *Face {
 	defaultFaceOnce.Do(func() {
 		han, err := Han()
@@ -46,7 +46,7 @@ func DefaultFace() *Face {
 			slog.Warn("CJK stroke data unavailable; Chinese output disabled", "err", err)
 			han = nil
 		}
-		defaultFace = NewFace(ScriptSimplex(), han)
+		defaultFace = NewFace(Futural(), han)
 	})
 	return defaultFace
 }

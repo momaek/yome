@@ -30,27 +30,15 @@ type Font struct {
 	maxY    float64 // lowest point of any glyph, for descender clearance
 }
 
-var (
-	futural       *Font
-	scriptSimplex *Font
-)
+var futural *Font
 
-// Futural returns the embedded Hershey Simplex font, kept as a plainer
-// fallback to the default cursive hand.
+// Futural returns the embedded Hershey Simplex font, the default for Latin
+// text.
 func Futural() *Font {
 	if futural == nil {
 		futural = mustParseJHF("futural.jhf", assets.FuturalJHF)
 	}
 	return futural
-}
-
-// ScriptSimplex returns the embedded Hershey Script Simplex font, the
-// single-stroke cursive used as the default Latin hand.
-func ScriptSimplex() *Font {
-	if scriptSimplex == nil {
-		scriptSimplex = mustParseJHF("scripts.jhf", assets.ScriptSimplexJHF)
-	}
-	return scriptSimplex
 }
 
 // mustParseJHF panics on parse failure, which for embedded data would be a
