@@ -16,7 +16,6 @@ import (
 	"github.com/momaek/yome/internal/geom"
 	"github.com/momaek/yome/internal/llm"
 	"github.com/momaek/yome/internal/trigger"
-	"github.com/momaek/yome/internal/ui"
 )
 
 func runServe(args []string) error {
@@ -91,10 +90,17 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 
 	slog.Info("gesture", "mode", g.Mode.String(), "at", fmt.Sprintf("(%.0f,%.0f)", g.At.X, g.At.Y))
 
+	// Feedback first, everything else after: the mark is the user's only
+	// signal that the gesture registered, so it must not queue behind
+	// probes, preflight, or — fatally — a toolbar tap, whose discard
+	// window once ate it entirely (first on-device session: no visible
+	// reaction for ten seconds).
+	s.markBusy(g.At)
+
 	// Orientation is a per-notebook property; the user may have switched
 	// notebooks since the last session. Detect fresh every time, and refuse
-	// outright when the screen is not a writable page — no ink, no error
-	// mark, just a log line (the mark itself would be ink somewhere wrong).
+	// outright when the screen is not a writable page — no further ink, just
+	// a log line (an error mark would be ink somewhere wrong).
 	s.invalidateOrientation()
 	if err := s.ensureNotebookView(); err != nil {
 		slog.Warn("gesture ignored", "err", err)
@@ -107,7 +113,6 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 		return
 	}
 
-	// Capture before the busy mark so the model never sees the mark.
 	viewImg, err := s.viewImage()
 	if err != nil {
 		slog.Error("capture failed", "err", err)
@@ -115,14 +120,10 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 		return
 	}
 
-	// Session etiquette starts here: the busy mark forces the pen tool, so
-	// the user's tool must be recorded before it, not after.
 	var originalTool string
 	if s.ui != nil {
 		originalTool = s.ui.CurrentTool()
 	}
-
-	s.markBusy()
 
 	start := time.Now()
 	_, _, err = runAgentSession(cfg, client, s, viewImg, s.pageArea(), g.Mode, false, cfg.API.MaxTurns, "")
@@ -140,29 +141,28 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 	}
 }
 
-// markBusy draws a small single-stroke hourglass near the trigger corner:
-// visible feedback that the gesture registered and minutes of pen work are
-// coming. One stroke keeps it one undo away (M0: one stroke = one undo step).
-// Best effort — a session must not die for its status mark.
-func (s *session) markBusy() {
+// markBusy draws a small single-stroke hourglass right where the gesture
+// landed, by raw injection: no probes, no pen-tool forcing, no verification —
+// those all cost seconds, and this mark's whole job is sub-second feedback.
+// Physical coordinates from the gesture itself, so no orientation detection
+// is needed and the mark appears exactly where the user tapped. With the
+// eraser selected it draws nothing, which is harmless in the inert corner;
+// the first real write forces the pen as always. One stroke keeps it one
+// undo away (M0: one stroke = one undo step). The model may see it in the
+// screenshot — the system prompt tells it to ignore the corner glyph.
+func (s *session) markBusy(at geom.Point) {
 	if !s.cfg.Gesture.StatusMark {
 		return
 	}
 	const size = 36.0
-	w, h := float64(geom.ScreenW), float64(geom.ScreenH)
-	if s.orientation() == ui.Landscape {
-		w, h = geom.LandscapeW, geom.LandscapeH
-	}
-	x1, y1 := w-60, h-60
+	x1 := min(at.X+size/2, geom.ScreenW-12)
+	y1 := min(at.Y+size/2, geom.ScreenH-12)
 	x0, y0 := x1-size, y1-size
 	// top-left → top-right → bottom-left → bottom-right → top-left: ⧖
 	strokes := []geom.Stroke{{Points: []geom.Point{
 		{X: x0, Y: y0}, {X: x1, Y: y0}, {X: x0, Y: y1}, {X: x1, Y: y1}, {X: x0, Y: y0},
 	}}}
-	if s.orientation() == ui.Landscape {
-		strokes = geom.LandscapeStrokes(strokes)
-	}
-	if err := s.writeStrokes(strokes, false, true); err != nil {
+	if err := s.in.Strokes(strokes); err != nil {
 		slog.Warn("could not draw the busy mark", "err", err)
 	}
 }

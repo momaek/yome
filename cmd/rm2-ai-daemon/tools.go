@@ -403,11 +403,19 @@ func (t *readPageTool) Run(ctx context.Context, input json.RawMessage) (agent.Re
 		return agent.Result{}, fmt.Errorf("read_page: captured, but could not flip back: %w", err)
 	}
 	if nowImg, err := tb.s.viewImage(); err == nil && maskedSum(nowImg) != home {
-		// Flipping back landed somewhere that renders differently. Say so —
-		// the model must not write while the page state is uncertain.
-		msg += "; WARNING: after flipping back the screen does not match the original page — do NOT write; finish with a text explanation instead"
+		// Not byte-identical — but xochitl's re-render of the same page can
+		// wobble a few antialiased stroke edges (measured 8 px on device), so
+		// only a substantial difference means we are on the wrong page. A
+		// genuinely different page differs by thousands of pixels.
+		const samePageTolerancePx = 100
 		bbox, n := diffBBox(homeImg, nowImg)
-		slog.Warn("read_page: frame after return does not match the original page", "diff_px", n, "bbox", bbox)
+		if n > samePageTolerancePx {
+			// The model must not write while the page state is uncertain.
+			msg += "; WARNING: after flipping back the screen does not match the original page — do NOT write; finish with a text explanation instead"
+			slog.Warn("read_page: frame after return does not match the original page", "diff_px", n, "bbox", bbox)
+		} else {
+			slog.Debug("read_page: same page within render tolerance", "diff_px", n, "bbox", bbox)
+		}
 	}
 	return agent.Result{
 		Text:   msg,
