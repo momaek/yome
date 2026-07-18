@@ -75,6 +75,14 @@ type Layout struct {
 	CapHeightPx float64 `toml:"cap_height_px"`
 	LineSpacing float64 `toml:"line_spacing"` // in cap heights; <1.8 makes descenders collide
 	Margin      Margin  `toml:"margin"`
+
+	// PenType and PenSize are UI-map control names (e.g. "pen_fineliner",
+	// "size_medium") forced once per session before writing. A pressure-width
+	// brush like the marker turns injected strokes into scratchy wobble, so
+	// legibility depends on writing with a uniform-width pen. Empty leaves
+	// the user's current pen untouched.
+	PenType string `toml:"pen_type"`
+	PenSize string `toml:"pen_size"`
 }
 
 // Margin is the unwritable border around the page, in pixels.
@@ -168,6 +176,11 @@ func Default() Config {
 			// them — a line's first character once opened the text keyboard
 			// mid-write (M1 on-device finding).
 			Margin: Margin{Top: 120, Right: 100, Bottom: 120, Left: 150},
+			// The fineliner draws uniform-width strokes; on-device comparison
+			// (2026-07-18) showed the pressure-width marker renders injected
+			// writing as scratchy wobble.
+			PenType: "pen_fineliner",
+			PenSize: "size_medium",
 		},
 		Inject: Inject{
 			PenDevice:    inject.PenDeviceName,

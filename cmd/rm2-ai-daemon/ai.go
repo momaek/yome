@@ -189,7 +189,10 @@ func runAgentSession(cfg config.Config, client llm.Client, s *session, viewImg *
 	}
 
 	if s != nil && s.ui != nil {
-		if tb.styled {
+		// Restore when the model styled the pen, and also when the daemon
+		// forced its configured writing pen (ensurePen): both leave the
+		// user's own pen replaced, so both owe a restore.
+		if tb.styled || s.penStyled {
 			// Style before tool: the panel path leaves the pen selected, so
 			// a non-pen original tool must be re-selected afterwards.
 			s.restorePenStyle()

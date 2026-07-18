@@ -12,7 +12,6 @@ import (
 func embeddedFonts() map[string]*Font {
 	return map[string]*Font{
 		"futural": Futural(),
-		"scripts": ScriptSimplex(),
 	}
 }
 

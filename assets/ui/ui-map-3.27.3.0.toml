@@ -62,7 +62,7 @@ toolbar_toggle = { tap = [55, 55], skip_if = "toolbar_open", verify = "toolbar_o
 tool_pen       = { tap = [55, 167], requires = "toolbar_open", verify = "pen_selected", skip_if = "pen_selected" }  # 已实战
 tool_highlight = { tap = [55, 280] }
 tool_text      = { tap = [55, 391] }
-tool_eraser    = { tap = [55, 504], requires = "toolbar_open", verify = "eraser_selected" }   # 已实战
+tool_eraser    = { tap = [55, 504], requires = "toolbar_open", verify = "eraser_selected", skip_if = "eraser_selected" }   # 已实战
 tool_select    = { tap = [55, 615], requires = "toolbar_open", verify = "select_selected" }
 tool_layers    = { tap = [55, 727] }
 undo           = { tap = [55, 836], requires = "toolbar_open" }  # 无可撤销时图标呈浅色虚线态
@@ -118,13 +118,15 @@ menu_add_page          = { tap = [300, 1816] }   # ★ 显式加页入口,取代
 # "toolbar_toggle?":工具栏通常常驻,但文本工具会话后会收起(实测),条件步兜底
 # select_pen 用条件步:笔已选中则零点击——写前的工具栏触摸点击会使随后 ~3s 的
 # 注入笔画被丢弃(2026-07-18 实测,见 progress.md),能不点就不点
+# tool_pen/tool_eraser 步骤必须带 "?":点击已选中的工具图标会切换其选项面板,
+# 无条件点击曾把随后的 pen_panel 长按抵消掉(2026-07-18 实测修复)
 select_pen      = ["toolbar_toggle?", "tool_pen?"]
-select_pen_type = ["toolbar_toggle?", "tool_pen", "pen_panel", "<pen_type>", "tool_pen"]  # 末步点笔图标关面板
+select_pen_type = ["toolbar_toggle?", "tool_pen?", "pen_panel", "<pen_type>", "tool_pen"]  # 末步点笔图标关面板
 # size/color 与 type 同构:面板内点击即生效。每种笔各自记忆粗细,故换粗细前先选定笔型
-select_pen_size  = ["toolbar_toggle?", "tool_pen", "pen_panel", "<size>", "tool_pen"]
-select_pen_color = ["toolbar_toggle?", "tool_pen", "pen_panel", "<color>", "tool_pen"]
+select_pen_size  = ["toolbar_toggle?", "tool_pen?", "pen_panel", "<size>", "tool_pen"]
+select_pen_color = ["toolbar_toggle?", "tool_pen?", "pen_panel", "<color>", "tool_pen"]
 undo_last       = ["toolbar_toggle?", "undo"]
-erase_page      = ["toolbar_toggle?", "tool_eraser", "eraser_panel", "erase_all", "tool_pen"]
+erase_page      = ["toolbar_toggle?", "tool_eraser?", "eraser_panel", "erase_all", "tool_pen"]
 # 显式加页(M3 new_page 工具):⋮ 菜单 → Add page。菜单为瞬态弹层,无专用探针,
 # 依赖 tap_gap 时序盲打;调用方以帧指纹变化验证翻到了新页(menu_add_page 点击★待真机验证)
 add_page        = ["toolbar_toggle?", "menu_more", "menu_add_page"]

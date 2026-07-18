@@ -40,6 +40,7 @@ type session struct {
 
 	orient         ui.Orientation
 	orientDetected bool
+	penStyled      bool // configured pen style already forced this session
 
 	pen     penstate.State
 	penErr  error
@@ -270,6 +271,29 @@ func (s *session) pageArea() geom.Rect {
 	return s.cfg.Layout.Area()
 }
 
+// ensurePen forces the pen tool and, once per session, the configured pen
+// style. Writing inherits whatever brush the user left active, and a
+// pressure-width brush (marker, paintbrush) renders injected strokes as
+// scratchy wobble — the single biggest legibility factor found on device.
+//
+// tapped reports whether any UI tap happened, so the caller knows to wait out
+// xochitl's post-tap input-discard window.
+func (s *session) ensurePen(engine *ui.Engine) (tapped bool, err error) {
+	tapped, err = engine.SelectPen()
+	if err != nil {
+		return false, fmt.Errorf("force pen tool: %w", err)
+	}
+	if s.penStyled || s.cfg.Layout.PenType == "" {
+		return tapped, nil
+	}
+	slog.Info("forcing pen style", "type", s.cfg.Layout.PenType, "size", s.cfg.Layout.PenSize)
+	if err := engine.SetPen(s.cfg.Layout.PenType, s.cfg.Layout.PenSize, ""); err != nil {
+		return false, fmt.Errorf("set pen style: %w", err)
+	}
+	s.penStyled = true
+	return true, nil
+}
+
 // writeStrokes performs a full write with the safety rails M0 showed are
 // needed: force the pen tool first, then confirm ink actually landed.
 //
@@ -292,8 +316,8 @@ func (s *session) writeStrokes(strokes []geom.Stroke, verify, selectPen bool) er
 		slog.Warn("skipping the forced pen tool check (-no-select-pen)")
 	} else if engine, err := s.requireUI(); err != nil {
 		slog.Warn("cannot force the pen tool", "err", err)
-	} else if tapped, err := engine.SelectPen(); err != nil {
-		return fmt.Errorf("force pen tool: %w", err)
+	} else if tapped, err := s.ensurePen(engine); err != nil {
+		return err
 	} else if tapped {
 		// A toolbar tap makes xochitl discard injected pen input for a few
 		// seconds (measured 2026-07-18: ~3s of strokes vanished). Waiting
