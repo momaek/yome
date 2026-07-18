@@ -34,6 +34,10 @@ func init() {
 		{"ui-run", "execute a UI feature from the map", runUIRun},
 		{"erase-page", "clear the current page (destructive)", runErasePage},
 		{"probe", "evaluate a UI probe against the screen", runProbe},
+		{"tap", "tap the touchscreen at a physical screen point", runTap},
+		{"record", "dump raw events from an input device", runRecord},
+		{"preview", "render an SVG's paths to a local PNG (no device)", runPreview},
+		{"swipe", "drag one finger between two physical screen points", runSwipe},
 		{"devices", "list input devices and their evdev names", runDevices},
 	}
 }

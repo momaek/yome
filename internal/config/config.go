@@ -93,8 +93,15 @@ type Inject struct {
 	PointDelayMs int      `toml:"point_delay_ms"`
 	PointSpacing float64  `toml:"point_spacing_px"`
 	LandingMs    int      `toml:"landing_pause_ms"`
+	ToolSettleMs int      `toml:"tool_settle_ms"`
 	Pressure     Pressure `toml:"pressure"`
 }
+
+// ToolSettle is how long to wait between a toolbar tap and pen injection:
+// xochitl discards injected pen input for a few seconds after a touch tap on
+// the toolbar (measured 2026-07-18 on 3.27.3.0 — ~3s of strokes vanished
+// silently). Only applies when a tool actually had to be switched.
+func (i Inject) ToolSettle() time.Duration { return time.Duration(i.ToolSettleMs) * time.Millisecond }
 
 // Pressure is the handwriting pressure envelope. See inject.PressureEnvelope.
 type Pressure struct {
@@ -154,7 +161,11 @@ func Default() Config {
 		Layout: Layout{
 			CapHeightPx: 50,
 			LineSpacing: 1.8,
-			Margin:      Margin{Top: 120, Right: 100, Bottom: 120, Left: 100},
+			// Left clears the toolbar strip (view-left ~110px in both
+			// orientations) with slack: pen strokes over toolbar icons press
+			// them — a line's first character once opened the text keyboard
+			// mid-write (M1 on-device finding).
+			Margin: Margin{Top: 120, Right: 100, Bottom: 120, Left: 150},
 		},
 		Inject: Inject{
 			PenDevice:    inject.PenDeviceName,
@@ -162,6 +173,7 @@ func Default() Config {
 			PointDelayMs: 5,
 			PointSpacing: 3,
 			LandingMs:    15,
+			ToolSettleMs: 3500,
 			Pressure: Pressure{
 				Base:        p.Base,
 				Attack:      p.Attack,
@@ -209,6 +221,12 @@ func (c Config) Validate() error {
 	}
 	if a := c.Layout.Area(); a.W <= 0 || a.H <= 0 {
 		errs = append(errs, fmt.Errorf("layout.margin leaves no writable area (%.0fx%.0f)", a.W, a.H))
+	}
+	// The toolbar occupies the view-left ~110px strip and pen strokes over its
+	// icons press them (a line's first character once opened the text
+	// keyboard). Writing there is never right.
+	if c.Layout.Margin.Left < 115 {
+		errs = append(errs, fmt.Errorf("layout.margin.left = %v would put strokes over the toolbar strip (view x < 110), where the pen presses UI buttons; use at least 115", c.Layout.Margin.Left))
 	}
 	if c.Inject.Pressure.Base <= 0 || c.Inject.Pressure.Base > inject.WacomMaxPres {
 		errs = append(errs, fmt.Errorf("inject.pressure.base must be in 1..%d, got %d", inject.WacomMaxPres, c.Inject.Pressure.Base))

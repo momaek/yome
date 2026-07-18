@@ -317,13 +317,13 @@ func (s Spec) rawRowRange(r image.Rectangle) (int, int) {
 	return r.Min.Y, r.Max.Y - 1
 }
 
-// InkRatioRect reads the portrait-space rect r and returns the fraction of its
-// pixels darker than BlackThreshold. It reads only the raw rows covering the
-// rect — one contiguous pread — so probing a toolbar block stays cheap.
-func (fb *Framebuffer) InkRatioRect(r image.Rectangle) (float64, error) {
+// inkRect reads the portrait-space rect r and counts its pixels darker than
+// BlackThreshold. It reads only the raw rows covering the rect — one
+// contiguous pread — so probing a toolbar block stays cheap.
+func (fb *Framebuffer) inkRect(r image.Rectangle) (ink, total int, err error) {
 	r = r.Intersect(image.Rect(0, 0, ScreenW, ScreenH))
 	if r.Empty() {
-		return 0, fmt.Errorf("region %v lies outside the %dx%d screen", r, ScreenW, ScreenH)
+		return 0, 0, fmt.Errorf("region %v lies outside the %dx%d screen", r, ScreenW, ScreenH)
 	}
 	bpp := int64(fb.spec.bytesPerPixel())
 	minRow, maxRow := fb.spec.rawRowRange(r)
@@ -331,10 +331,9 @@ func (fb *Framebuffer) InkRatioRect(r image.Rectangle) (float64, error) {
 	buf := make([]byte, int64(maxRow-minRow+1)*rowBytes)
 	off := int64(fb.Base) + int64(minRow)*rowBytes
 	if _, err := fb.mem.ReadAt(buf, off); err != nil {
-		return 0, fmt.Errorf("read rows %d..%d of region %v at %#x: %w", minRow, maxRow, r, off, err)
+		return 0, 0, fmt.Errorf("read rows %d..%d of region %v at %#x: %w", minRow, maxRow, r, off, err)
 	}
 
-	var ink, total int
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		for x := r.Min.X; x < r.Max.X; x++ {
 			i := fb.spec.rawIndex(x, y) - int64(minRow)*int64(fb.spec.RawW)
@@ -344,5 +343,26 @@ func (fb *Framebuffer) InkRatioRect(r image.Rectangle) (float64, error) {
 			total++
 		}
 	}
+	return ink, total, nil
+}
+
+// InkRatioRect returns the fraction of r's pixels that are ink.
+func (fb *Framebuffer) InkRatioRect(r image.Rectangle) (float64, error) {
+	ink, total, err := fb.inkRect(r)
+	if err != nil {
+		return 0, err
+	}
 	return float64(ink) / float64(total), nil
+}
+
+// InkCountRect counts the ink pixels inside r only. Write verification uses
+// this over the written area rather than the whole frame: a full-frame count
+// also swings when xochitl redraws UI (a keyboard opening mid-write once
+// produced a million-pixel "ink" delta with barely a stroke on the page).
+func (fb *Framebuffer) InkCountRect(r image.Rectangle) (int, error) {
+	ink, _, err := fb.inkRect(r)
+	if err != nil {
+		return 0, err
+	}
+	return ink, nil
 }

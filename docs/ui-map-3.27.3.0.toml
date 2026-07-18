@@ -22,7 +22,8 @@ probe_poll_ms = 150
 probe_timeout_ms = 2000
 # 注意:曾出现过一段时间内所有 tap 无响应、随后同样的 tap 正常的现象(原因未定位,
 # 疑与 UI 焦点/首触激活有关)。探针验证 + 超时重试是硬要求,绝不盲打。
-# 工具栏不自动隐藏:空闲 65s 实测仍常驻(选中块与图标像素稳定)。
+# 工具栏空闲不自动隐藏(65s 实测常驻),但**文本工具会话结束后会收起**(2026-07-18 实测),
+# 故所有 feature 以 "toolbar_toggle?" 开局兜底。
 
 # ---------- 截帧(2026-07-17 实测) ----------
 [ui."3.27.3.0".capture]
@@ -37,7 +38,9 @@ rotation = "none"
 # ---------- 探针:命名状态 → 采样点/区域 + 期望 ----------
 # 工具选中态 = 图标处 110×110 反色块,大面积暗(dark_block:暗比 > ratio,默认 0.5)
 [ui."3.27.3.0".probes]
-toolbar_open      = { at = [55, 55], expect = "dark" }     # 顶部时钟图标笔画
+# 工具栏展开态:笔工具位有图标(未选中=线条图标,选中=反色块,暗比都 >0.05;收起后为空白)
+# 注意不能探 (55,55):收起态遗留的 ⊙ toggle 图标与展开态首图标同位同形
+toolbar_open      = { region = [0, 112, 110, 222], expect = "dark_block", ratio = 0.03 }
 pen_selected      = { region = [0, 112, 110, 222], expect = "dark_block" }
 eraser_selected   = { region = [0, 449, 110, 559], expect = "dark_block" }
 select_selected   = { region = [0, 560, 110, 670], expect = "dark_block" }
@@ -53,14 +56,16 @@ orientation_landscape = { region = [100, 1750, 1000, 1872], expect = "dark_block
 # ---------- 控件 ----------
 # 工具栏(左边缘竖排,图标中心 x=55,间距 ~112)
 [ui."3.27.3.0".controls]
-clock          = { tap = [55, 55] }       # 顶部时钟/专注(未实测点击后果,勿盲点)
-tool_pen       = { tap = [55, 167], verify = "pen_selected" }      # 已实战
+# (55,55) 实为**工具栏收起/展开 toggle**(2026-07-18 真机实测:文本工具会话后工具栏
+# 自动收起、仅剩 ⊙,点击后重新展开)。此前标定误记为"时钟/专注"。
+toolbar_toggle = { tap = [55, 55], skip_if = "toolbar_open", verify = "toolbar_open" }
+tool_pen       = { tap = [55, 167], requires = "toolbar_open", verify = "pen_selected", skip_if = "pen_selected" }  # 已实战
 tool_highlight = { tap = [55, 280] }
 tool_text      = { tap = [55, 391] }
-tool_eraser    = { tap = [55, 504], verify = "eraser_selected" }   # 已实战
-tool_select    = { tap = [55, 615], verify = "select_selected" }
+tool_eraser    = { tap = [55, 504], requires = "toolbar_open", verify = "eraser_selected" }   # 已实战
+tool_select    = { tap = [55, 615], requires = "toolbar_open", verify = "select_selected" }
 tool_layers    = { tap = [55, 727] }
-undo           = { tap = [55, 836] }      # 无可撤销时图标呈浅色虚线态
+undo           = { tap = [55, 836], requires = "toolbar_open" }  # 无可撤销时图标呈浅色虚线态
 redo           = { tap = [55, 948] }
 page_overview  = { tap = [55, 1591] }
 tag            = { tap = [55, 1705] }
@@ -110,13 +115,16 @@ menu_add_page          = { tap = [300, 1816] }   # ★ 显式加页入口,取代
 
 # ---------- 功能:控件路径("?" = 状态已满足则跳过) ----------
 [ui."3.27.3.0".features]
-select_pen      = ["tool_pen"]                       # 无 toolbar_toggle,工具栏常驻
-select_pen_type = ["tool_pen", "pen_panel", "<pen_type>", "tool_pen"]  # 末步点笔图标关面板
+# "toolbar_toggle?":工具栏通常常驻,但文本工具会话后会收起(实测),条件步兜底
+# select_pen 用条件步:笔已选中则零点击——写前的工具栏触摸点击会使随后 ~3s 的
+# 注入笔画被丢弃(2026-07-18 实测,见 progress.md),能不点就不点
+select_pen      = ["toolbar_toggle?", "tool_pen?"]
+select_pen_type = ["toolbar_toggle?", "tool_pen", "pen_panel", "<pen_type>", "tool_pen"]  # 末步点笔图标关面板
 # size/color 与 type 同构:面板内点击即生效。每种笔各自记忆粗细,故换粗细前先选定笔型
-select_pen_size  = ["tool_pen", "pen_panel", "<size>", "tool_pen"]
-select_pen_color = ["tool_pen", "pen_panel", "<color>", "tool_pen"]
-undo_last       = ["undo"]
-erase_page      = ["tool_eraser", "eraser_panel", "erase_all", "tool_pen"]  # ★erase_all 未实测
+select_pen_size  = ["toolbar_toggle?", "tool_pen", "pen_panel", "<size>", "tool_pen"]
+select_pen_color = ["toolbar_toggle?", "tool_pen", "pen_panel", "<color>", "tool_pen"]
+undo_last       = ["toolbar_toggle?", "undo"]
+erase_page      = ["toolbar_toggle?", "tool_eraser", "eraser_panel", "erase_all", "tool_pen"]
 
 # ---------- 横屏(landscape;已实战标定 2026-07-18)----------
 # 物理帧缓冲与触摸坐标系不变(仍是竖屏 1404×1872 空间),内容整体旋转:

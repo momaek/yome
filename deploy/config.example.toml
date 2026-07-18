@@ -47,7 +47,9 @@ line_spacing = 1.8
 top = 120
 right = 100
 bottom = 120
-left = 100
+# Left must clear the toolbar strip (view-left ~110px, both orientations):
+# pen strokes over toolbar icons press them. The daemon rejects values < 115.
+left = 150
 
 [inject]
 # Enumerated by evdev name: event node numbers are not stable across boots.
@@ -57,6 +59,9 @@ touch_device = "pt_mt"
 point_delay_ms = 5
 point_spacing_px = 3
 landing_pause_ms = 15
+# After a toolbar tap, xochitl silently discards injected pen input for a few
+# seconds. Waited out only when a tool actually had to be switched.
+tool_settle_ms = 3500
 
 # The pressure envelope is what makes injected strokes read as handwriting.
 # Constant pressure gives an even hairline that looks machine-drawn; ramping in

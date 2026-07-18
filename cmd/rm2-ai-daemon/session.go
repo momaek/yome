@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"log/slog"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/momaek/yome/internal/capture"
 	"github.com/momaek/yome/internal/config"
@@ -179,7 +181,7 @@ func (s *session) pageArea() geom.Rect {
 // Both matter for the same reason. Injected strokes are rendered with whatever
 // tool xochitl has selected, so if the user left the eraser active, a write
 // erases instead — silently, with no error from any layer.
-func (s *session) writeStrokes(strokes []geom.Stroke, verify bool) error {
+func (s *session) writeStrokes(strokes []geom.Stroke, verify, selectPen bool) error {
 	if len(strokes) == 0 {
 		return fmt.Errorf("nothing to write")
 	}
@@ -191,11 +193,25 @@ func (s *session) writeStrokes(strokes []geom.Stroke, verify bool) error {
 		strokes = geom.LandscapeStrokes(strokes)
 	}
 
-	if engine, err := s.requireUI(); err != nil {
+	if !selectPen {
+		slog.Warn("skipping the forced pen tool check (-no-select-pen)")
+	} else if engine, err := s.requireUI(); err != nil {
 		slog.Warn("cannot force the pen tool", "err", err)
-	} else if err := engine.SelectPen(); err != nil {
+	} else if tapped, err := engine.SelectPen(); err != nil {
 		return fmt.Errorf("force pen tool: %w", err)
+	} else if tapped {
+		// A toolbar tap makes xochitl discard injected pen input for a few
+		// seconds (measured 2026-07-18: ~3s of strokes vanished). Waiting
+		// only after a real tap keeps the common already-on-pen case instant.
+		settle := s.cfg.Inject.ToolSettle()
+		slog.Info("tool switched; waiting for xochitl to accept pen input again", "settle", settle)
+		time.Sleep(settle)
 	}
+
+	// Verification counts ink only inside the written area (with a small pad):
+	// a full-frame count also swings when xochitl redraws UI — a keyboard
+	// opening mid-write once produced a million-pixel "delta" (M1 finding).
+	inkArea := writeBounds(strokes)
 
 	var before int
 	if verify {
@@ -203,10 +219,10 @@ func (s *session) writeStrokes(strokes []geom.Stroke, verify bool) error {
 		if err != nil {
 			return fmt.Errorf("ink verification needs capture: %w (pass -no-verify to write anyway)", err)
 		}
-		if before, err = fb.InkCount(); err != nil {
+		if before, err = fb.InkCountRect(inkArea); err != nil {
 			return fmt.Errorf("count ink before write: %w", err)
 		}
-		slog.Debug("ink before write", "px", before)
+		slog.Debug("ink before write", "px", before, "area", inkArea)
 	}
 
 	slog.Info("writing", "strokes", len(strokes))
@@ -217,16 +233,39 @@ func (s *session) writeStrokes(strokes []geom.Stroke, verify bool) error {
 	if !verify {
 		return nil
 	}
-	after, err := s.fb.InkCount()
-	if err != nil {
-		return fmt.Errorf("count ink after write: %w", err)
+	// xochitl composites the frame a beat after the last event, so poll
+	// rather than read once: a single immediate read once measured -276 on a
+	// write that had in fact landed.
+	var after int
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		n, err := s.fb.InkCountRect(inkArea)
+		if err != nil {
+			return fmt.Errorf("count ink after write: %w", err)
+		}
+		after = n
+		if after > before || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	delta := after - before
-	slog.Info("ink verified", "before", before, "after", after, "delta", delta)
+	slog.Info("ink verified", "area", inkArea, "before", before, "after", after, "delta", delta)
 	if delta <= 0 {
-		return fmt.Errorf("no ink appeared (ink pixels %d -> %d): the strokes were injected but nothing was drawn — xochitl most likely has the eraser or another non-pen tool selected", before, after)
+		return fmt.Errorf("no ink appeared (ink pixels %d -> %d in %v): the strokes were injected but nothing was drawn — xochitl most likely has the eraser or another non-pen tool selected", before, after, inkArea)
 	}
 	return nil
+}
+
+// writeBounds is the physical-space rectangle the strokes will land in,
+// padded a little for stroke width.
+func writeBounds(strokes []geom.Stroke) image.Rectangle {
+	b, ok := geom.Bounds(strokes)
+	if !ok {
+		return image.Rect(0, 0, geom.ScreenW, geom.ScreenH)
+	}
+	const pad = 12
+	return image.Rect(int(b.X)-pad, int(b.Y)-pad, int(b.Right())+pad, int(b.Bottom())+pad)
 }
 
 // readTextArg resolves -text / -file into the text to write.

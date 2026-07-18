@@ -272,9 +272,18 @@ func (e *Engine) Tap(name string) error {
 //	"control?"   tap it unless its skip_if state already holds
 //	"<param>"    tap the control named by params["param"]
 func (e *Engine) Run(feature string, params map[string]string) error {
+	_, err := e.run(feature, params)
+	return err
+}
+
+// run is Run, also reporting how many taps it actually performed. Callers use
+// the count to decide whether xochitl needs settling time: after a toolbar
+// tap, injected pen input is discarded for ~3s (measured 2026-07-18 on
+// 3.27.3.0), so a zero-tap run means writing can start immediately.
+func (e *Engine) run(feature string, params map[string]string) (taps int, err error) {
 	steps, ok := e.ver.Features[feature]
 	if !ok {
-		return fmt.Errorf("unknown feature %q", feature)
+		return 0, fmt.Errorf("unknown feature %q", feature)
 	}
 	e.log.Debug("ui run", "feature", feature, "steps", len(steps))
 
@@ -285,7 +294,7 @@ func (e *Engine) Run(feature string, params map[string]string) error {
 			key := strings.TrimSuffix(p, ">")
 			v, ok := params[key]
 			if !ok {
-				return fmt.Errorf("feature %q step %d needs parameter %q", feature, i+1, key)
+				return taps, fmt.Errorf("feature %q step %d needs parameter %q", feature, i+1, key)
 			}
 			name = v
 		}
@@ -293,14 +302,14 @@ func (e *Engine) Run(feature string, params map[string]string) error {
 		if conditional {
 			c, ok := e.ver.Controls[name]
 			if !ok {
-				return fmt.Errorf("feature %q step %d: unknown control %q", feature, i+1, name)
+				return taps, fmt.Errorf("feature %q step %d: unknown control %q", feature, i+1, name)
 			}
 			if c.SkipIf == "" {
-				return fmt.Errorf("feature %q step %d: %q is conditional but the map gives it no skip_if state", feature, i+1, name)
+				return taps, fmt.Errorf("feature %q step %d: %q is conditional but the map gives it no skip_if state", feature, i+1, name)
 			}
 			skip, err := e.Probe(c.SkipIf)
 			if err != nil {
-				return fmt.Errorf("feature %q step %d: %w", feature, i+1, err)
+				return taps, fmt.Errorf("feature %q step %d: %w", feature, i+1, err)
 			}
 			if skip {
 				e.log.Debug("ui skip", "feature", feature, "control", name, "because", c.SkipIf)
@@ -309,10 +318,11 @@ func (e *Engine) Run(feature string, params map[string]string) error {
 		}
 
 		if err := e.Tap(name); err != nil {
-			return fmt.Errorf("feature %q step %d/%d: %w", feature, i+1, len(steps), err)
+			return taps, fmt.Errorf("feature %q step %d/%d: %w", feature, i+1, len(steps), err)
 		}
+		taps++
 	}
-	return nil
+	return taps, nil
 }
 
 // Features lists the feature names in the loaded map, sorted.
@@ -337,7 +347,15 @@ func sortedKeys[V any](m map[string]V) []string {
 // injected strokes are rendered with whatever tool is currently selected, so a
 // user who left the eraser active would have the daemon silently erase instead
 // of write, with no error anywhere (M0 finding).
-func (e *Engine) SelectPen() error { return e.Run("select_pen", nil) }
+//
+// tapped reports whether any tap was actually needed: when the pen is already
+// selected this is a zero-tap probe, and the caller can start writing at once.
+// After a real tap, xochitl discards injected pen input for a few seconds
+// (measured 2026-07-18), so the caller must wait before injecting strokes.
+func (e *Engine) SelectPen() (tapped bool, err error) {
+	taps, err := e.run("select_pen", nil)
+	return taps > 0, err
+}
 
 // SetPenType switches to a specific pen. control is a control name such as
 // "pen_marker".
