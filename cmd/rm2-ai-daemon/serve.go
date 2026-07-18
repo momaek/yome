@@ -92,8 +92,14 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 	slog.Info("gesture", "mode", g.Mode.String(), "at", fmt.Sprintf("(%.0f,%.0f)", g.At.X, g.At.Y))
 
 	// Orientation is a per-notebook property; the user may have switched
-	// notebooks since the last session. Detect fresh every time.
+	// notebooks since the last session. Detect fresh every time, and refuse
+	// outright when the screen is not a writable page — no ink, no error
+	// mark, just a log line (the mark itself would be ink somewhere wrong).
 	s.invalidateOrientation()
+	if err := s.ensureNotebookView(); err != nil {
+		slog.Warn("gesture ignored", "err", err)
+		return
+	}
 
 	if err := preflight(cfg); err != nil {
 		slog.Error("preflight failed", "err", err)
