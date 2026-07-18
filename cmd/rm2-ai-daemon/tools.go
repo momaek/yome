@@ -367,10 +367,11 @@ func (t *readPageTool) Run(ctx context.Context, input json.RawMessage) (agent.Re
 		return agent.Result{}, fmt.Errorf("read_page: offset must be -1 or 1, got %d", in.Offset)
 	}
 
-	home, err := tb.s.fingerprint()
+	homeImg, err := tb.s.viewImage()
 	if err != nil {
 		return agent.Result{}, fmt.Errorf("read_page: %w", err)
 	}
+	home := maskedSum(homeImg)
 
 	dir, back := pagePrev, pageNext
 	if in.Offset == 1 {
@@ -401,11 +402,12 @@ func (t *readPageTool) Run(ctx context.Context, input json.RawMessage) (agent.Re
 	if _, err := tb.s.turnPage(back); err != nil {
 		return agent.Result{}, fmt.Errorf("read_page: captured, but could not flip back: %w", err)
 	}
-	if now, err := tb.s.fingerprint(); err == nil && now != home {
+	if nowImg, err := tb.s.viewImage(); err == nil && maskedSum(nowImg) != home {
 		// Flipping back landed somewhere that renders differently. Say so —
 		// the model must not write while the page state is uncertain.
 		msg += "; WARNING: after flipping back the screen does not match the original page — do NOT write; finish with a text explanation instead"
-		slog.Warn("read_page: frame after return does not match the original page")
+		bbox, n := diffBBox(homeImg, nowImg)
+		slog.Warn("read_page: frame after return does not match the original page", "diff_px", n, "bbox", bbox)
 	}
 	return agent.Result{
 		Text:   msg,

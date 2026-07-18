@@ -7,6 +7,7 @@ package main
 import (
 	"crypto/md5"
 	"fmt"
+	"image"
 	"log/slog"
 	"time"
 
@@ -36,18 +37,54 @@ const (
 	framePoll = 200 * time.Millisecond
 )
 
-// fingerprint hashes the physical frame. Rendering is deterministic, so the
-// same page yields the same hash, and any visible change yields a new one.
+// footerMaskPx is the view-bottom strip excluded from fingerprints. xochitl
+// shows a transient "Page X of Y" indicator there after every page action
+// (fading seconds later), which made exact fingerprints mismatch pages that
+// are in fact identical (2026-07-18 on-device finding). Masking it also
+// keeps the first/last-page check honest: on a refused turn the indicator
+// still appears, and without the mask that alone reads as "page changed".
+const footerMaskPx = 100
+
+// fingerprint hashes the view-space frame minus the footer strip. Rendering
+// is deterministic, so the same page yields the same hash, and any content
+// change yields a new one.
 func (s *session) fingerprint() ([16]byte, error) {
-	fb, err := s.requireFB()
+	img, err := s.viewImage()
 	if err != nil {
 		return [16]byte{}, err
 	}
-	img, err := fb.Image()
-	if err != nil {
-		return [16]byte{}, err
+	return maskedSum(img), nil
+}
+
+func maskedSum(img *image.Gray) [16]byte {
+	b := img.Bounds()
+	cut := b.Max.Y - footerMaskPx
+	if cut < b.Min.Y {
+		cut = b.Min.Y
 	}
-	return md5.Sum(img.Pix), nil
+	return md5.Sum(img.Pix[:cut*img.Stride])
+}
+
+// diffBBox reports where two same-size frames differ (footer excluded):
+// the forensic tool behind "the page does not match" warnings.
+func diffBBox(a, b *image.Gray) (bbox image.Rectangle, n int) {
+	if a.Bounds() != b.Bounds() {
+		return a.Bounds(), -1
+	}
+	h := a.Bounds().Dy() - footerMaskPx
+	w := a.Bounds().Dx()
+	minX, minY, maxX, maxY := w, h, -1, -1
+	for y := 0; y < h; y++ {
+		ra, rb := a.Pix[y*a.Stride:y*a.Stride+w], b.Pix[y*b.Stride:y*b.Stride+w]
+		for x := 0; x < w; x++ {
+			if ra[x] != rb[x] {
+				n++
+				minX, minY = min(minX, x), min(minY, y)
+				maxX, maxY = max(maxX, x), max(maxY, y)
+			}
+		}
+	}
+	return image.Rect(minX, minY, maxX+1, maxY+1), n
 }
 
 // waitFrameChange polls until the frame differs from old, or times out.
