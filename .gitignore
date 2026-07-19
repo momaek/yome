@@ -7,6 +7,8 @@ m0/m0-local
 
 # local captures
 *.png
+# ...but README screenshots are tracked
+!docs/images/*.png
 
 # compiled daemon binary (build artifact); anchored so cmd/rm2-ai-daemon stays tracked
 /rm2-ai-daemon
