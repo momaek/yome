@@ -2,9 +2,11 @@ package inject
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/momaek/yome/internal/geom"
 )
@@ -242,5 +244,68 @@ func TestSwipeMovesAcrossTheScreen(t *testing.T) {
 	}
 	if ids := find(evs, evAbs, absMtTrackingID); ids[len(ids)-1] != -1 {
 		t.Error("swipe never released the contact")
+	}
+}
+
+// A cancel mid-write must not leave the synthetic pen down: the contact and
+// the tool both lift, and the context error is reported.
+func TestStrokesCtxCancelLiftsCleanly(t *testing.T) {
+	in, pen, _ := testInjector(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel from inside the trace: the sleep hook fires per injected point.
+	points := 0
+	in.sleep = func(time.Duration) {
+		points++
+		if points == 3 {
+			cancel()
+		}
+	}
+
+	long := geom.Stroke{Points: []geom.Point{{X: 100, Y: 100}, {X: 700, Y: 100}}}
+	tail := geom.Stroke{Points: []geom.Point{{X: 100, Y: 300}, {X: 700, Y: 300}}}
+	err := in.StrokesCtx(ctx, []geom.Stroke{long, tail})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+
+	evs := decode(t, pen.Bytes())
+	// Far fewer points than the full ~200: the trace stopped mid-stroke and
+	// the second stroke never started.
+	if xs := find(evs, evAbs, absX); len(xs) > 30 {
+		t.Errorf("%d X events injected after an early cancel, want the trace cut short", len(xs))
+	}
+	// The lift is not optional. Contact up, pressure zeroed, tool retracted.
+	if s := find(evs, evKey, btnTouch); len(s) == 0 || s[len(s)-1] != 0 {
+		t.Errorf("BTN_TOUCH sequence = %v, want it to end 0", s)
+	}
+	if p := find(evs, evAbs, absPressure); len(p) == 0 || p[len(p)-1] != 0 {
+		t.Errorf("final pressure = %v, want 0", p[len(p)-1:])
+	}
+	if tool := find(evs, evKey, btnToolPen); len(tool) != 2 || tool[1] != 0 {
+		t.Errorf("BTN_TOOL_PEN sequence = %v, want [1 0]", tool)
+	}
+}
+
+// The OnTouch hook must bracket the whole synthetic contact, so a listener
+// masking on it can never mistake our tap for the user's finger.
+func TestTapAnnouncesTouchWindow(t *testing.T) {
+	in, _, touch := testInjector(t)
+	var calls []bool
+	written := -1
+	in.OnTouch = func(active bool) {
+		calls = append(calls, active)
+		if !active {
+			written = touch.Len()
+		}
+	}
+	if err := in.Tap(geom.Point{X: 700, Y: 900}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || !calls[0] || calls[1] {
+		t.Fatalf("OnTouch calls = %v, want [true false]", calls)
+	}
+	if written != touch.Len() {
+		t.Errorf("OnTouch(false) fired before the last touch byte was written")
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"log/slog"
@@ -350,7 +351,7 @@ func (s *session) ensurePen(engine *ui.Engine) (tapped bool, err error) {
 // Both matter for the same reason. Injected strokes are rendered with whatever
 // tool xochitl has selected, so if the user left the eraser active, a write
 // erases instead — silently, with no error from any layer.
-func (s *session) writeStrokes(strokes []geom.Stroke, verify, selectPen bool) error {
+func (s *session) writeStrokes(ctx context.Context, strokes []geom.Stroke, verify, selectPen bool) error {
 	if len(strokes) == 0 {
 		return fmt.Errorf("nothing to write")
 	}
@@ -395,7 +396,14 @@ func (s *session) writeStrokes(strokes []geom.Stroke, verify, selectPen bool) er
 	}
 
 	slog.Info("writing", "strokes", len(strokes))
-	if err := s.in.Strokes(strokes); err != nil {
+	err := s.in.StrokesCtx(ctx, strokes)
+	// Stamp the touch-rejection window in every outcome: the ink is already
+	// on the wire. The normal path pads it out with ink-verify polling and a
+	// model round trip, but a cancelled write goes straight to the restore
+	// taps — which once fired into the dead window and timed out (on-device
+	// 2026-07-19).
+	s.penQuiet()
+	if err != nil {
 		return err
 	}
 
