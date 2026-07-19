@@ -79,7 +79,11 @@ func (t *statusTool) Run(ctx context.Context, input json.RawMessage) (agent.Resu
 		t.s.setStatus(label)
 	}
 	res, err := t.Tool.Run(ctx, input)
-	t.s.setStatus(statusThinking)
+	if ctx.Err() == nil {
+		// After a cancel there is no more thinking — the session is about to
+		// erase the whole line; writing it first would be ink for nothing.
+		t.s.setStatus(statusThinking)
+	}
 	return res, err
 }
 
@@ -274,7 +278,7 @@ func (t *writeTextTool) Run(ctx context.Context, input json.RawMessage) (agent.R
 	if tb.dry {
 		slog.Info("dry-run: not writing", "lines", len(res.Lines), "strokes", len(res.Strokes))
 	} else {
-		if err := tb.s.writeStrokes(res.Strokes, true, true); err != nil {
+		if err := tb.s.writeStrokes(ctx, res.Strokes, true, true); err != nil {
 			return agent.Result{}, err
 		}
 	}
@@ -351,7 +355,7 @@ func (t *drawTool) Run(ctx context.Context, input json.RawMessage) (agent.Result
 	if tb.dry {
 		slog.Info("dry-run: not drawing", "paths", len(in.Paths), "strokes", len(fitted))
 	} else {
-		if err := tb.s.writeStrokes(fitted, true, true); err != nil {
+		if err := tb.s.writeStrokes(ctx, fitted, true, true); err != nil {
 			return agent.Result{}, err
 		}
 	}

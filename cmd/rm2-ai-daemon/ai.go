@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -103,7 +104,7 @@ func runAI(args []string) error {
 	if turns <= 0 {
 		turns = cfg.API.MaxTurns
 	}
-	out, tb, err := runAgentSession(cfg, client, s, viewImg, area, sessionMode, dryRun, turns, *instruction)
+	out, tb, err := runAgentSession(context.Background(), cfg, client, s, viewImg, area, sessionMode, dryRun, turns, *instruction)
 	if err != nil {
 		return err
 	}
@@ -120,7 +121,7 @@ func runAI(args []string) error {
 
 // runAgentSession is the shared heart of ai and serve: prompt assembly, tool
 // assembly, session etiquette, and the loop itself. s is nil offline.
-func runAgentSession(cfg config.Config, client llm.Client, s *session, viewImg *image.Gray, area geom.Rect, mode trigger.Mode, dryRun bool, maxTurns int, instruction string) (*agent.Outcome, *toolbox, error) {
+func runAgentSession(ctx context.Context, cfg config.Config, client llm.Client, s *session, viewImg *image.Gray, area geom.Rect, mode trigger.Mode, dryRun bool, maxTurns int, instruction string) (*agent.Outcome, *toolbox, error) {
 	face := layout.DefaultFace()
 	capH := cfg.Layout.CapHeightPx
 	free := freeAreaBelowInk(viewImg, area, capH)
@@ -178,13 +179,14 @@ func runAgentSession(cfg config.Config, client llm.Client, s *session, viewImg *
 		s.recordPenState()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	start := time.Now()
 	out, err := loop.Run(ctx, initial)
-	if err != nil && s != nil {
+	if err != nil && s != nil && !errors.Is(err, context.Canceled) {
 		// Feedback first: the corner mark must not queue behind the restore
-		// taps below (same lesson as markBusy).
+		// taps below (same lesson as markBusy). A user cancel is not an
+		// error — no × for doing what was asked.
 		s.markError()
 	}
 

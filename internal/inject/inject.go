@@ -1,6 +1,7 @@
 package inject
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -53,6 +54,13 @@ type Injector struct {
 	closers []io.Closer
 	opts    Options
 	sleep   func(time.Duration)
+
+	// OnTouch, when set, is called with true right before synthetic touch
+	// contact is written and false right after it lifts. The trigger listener
+	// reads the very device these events land on; the hook is how it knows a
+	// tap is ours and not the user's (the cancel gesture must stay armed
+	// during a session, so the listener can no longer just pause wholesale).
+	OnTouch func(active bool)
 }
 
 // Open finds the pen and touch devices by name and opens them for writing.
@@ -111,7 +119,16 @@ func (in *Injector) Close() error {
 // that is the eraser, this silently erases instead of writing. Callers must
 // force the pen tool first (see internal/ui) and verify ink afterwards.
 func (in *Injector) Strokes(strokes []geom.Stroke) error {
-	return in.trace(btnToolPen, strokes)
+	return in.trace(context.Background(), btnToolPen, strokes)
+}
+
+// StrokesCtx is Strokes with cancellation: a page of text takes minutes to
+// inject, and the user's cancel gesture must be able to stop it mid-way. On
+// cancellation the contact is lifted and the tool announced away cleanly —
+// the stroke in progress simply ends where it was — and ctx.Err() is
+// returned.
+func (in *Injector) StrokesCtx(ctx context.Context, strokes []geom.Stroke) error {
+	return in.trace(ctx, btnToolPen, strokes)
 }
 
 // Erase traces the same trajectories with the rubber tool announced instead
@@ -122,7 +139,7 @@ func (in *Injector) Strokes(strokes []geom.Stroke) error {
 // tool selection. The erased band's width follows xochitl's eraser size
 // setting.
 func (in *Injector) Erase(strokes []geom.Stroke) error {
-	return in.trace(btnToolRubber, strokes)
+	return in.trace(context.Background(), btnToolRubber, strokes)
 }
 
 // hoverDistance is the ABS_DISTANCE the synthetic rubber "approaches" from
@@ -141,7 +158,7 @@ func firstDrawable(strokes []geom.Stroke) *geom.Stroke {
 }
 
 // trace injects a set of polylines under the given tool announcement.
-func (in *Injector) trace(tool uint16, strokes []geom.Stroke) error {
+func (in *Injector) trace(ctx context.Context, tool uint16, strokes []geom.Stroke) error {
 	w := &writer{w: in.pen}
 
 	// The hardware announces a tool with its position and hover distance in
@@ -166,13 +183,17 @@ func (in *Injector) trace(tool uint16, strokes []geom.Stroke) error {
 	}
 	in.sleep(50 * time.Millisecond)
 
+	var cancelled error
 	for i, s := range strokes {
 		if len(s.Points) < 2 {
 			continue // a lone point makes no mark
 		}
-		in.stroke(w, s)
+		cancelled = in.stroke(ctx, w, s)
 		if w.err != nil {
 			return fmt.Errorf("stroke %d/%d: %w", i+1, len(strokes), w.err)
+		}
+		if cancelled != nil {
+			break // contact already lifted cleanly; only the tool remains
 		}
 	}
 
@@ -181,12 +202,14 @@ func (in *Injector) trace(tool uint16, strokes []geom.Stroke) error {
 	if w.err != nil {
 		return fmt.Errorf("lift tool: %w", w.err)
 	}
-	return nil
+	return cancelled
 }
 
 // stroke draws one polyline: hover to the start, touch down, trace with the
-// pressure envelope, lift.
-func (in *Injector) stroke(w *writer, s geom.Stroke) {
+// pressure envelope, lift. A cancelled ctx stops the trace between points;
+// the lift still happens (never leave a synthetic contact down) and the
+// context error is returned.
+func (in *Injector) stroke(ctx context.Context, w *writer, s geom.Stroke) error {
 	total := s.Length()
 	press := func(frac float64) int32 { return in.opts.Pressure.At(frac, total) }
 
@@ -202,6 +225,8 @@ func (in *Injector) stroke(w *writer, s geom.Stroke) {
 	w.report()
 
 	var traveled float64
+	var cancelled error
+trace:
 	for i := 1; i < len(s.Points); i++ {
 		a, b := s.Points[i-1], s.Points[i]
 		dx, dy := b.X-a.X, b.Y-a.Y
@@ -214,6 +239,9 @@ func (in *Injector) stroke(w *writer, s geom.Stroke) {
 			n = int(seg/in.opts.PointSpacing) + 1
 		}
 		for j := 1; j <= n; j++ {
+			if cancelled = ctx.Err(); cancelled != nil {
+				break trace
+			}
 			t := float64(j) / float64(n)
 			x, y := ToWacom(geom.Point{X: a.X + dx*t, Y: a.Y + dy*t})
 			frac := 0.0
@@ -233,11 +261,24 @@ func (in *Injector) stroke(w *writer, s geom.Stroke) {
 	w.emit(evKey, btnTouch, 0)
 	w.report()
 	in.sleep(in.opts.LandingPause)
+	return cancelled
+}
+
+// touchWindow announces a synthetic-touch window to OnTouch and returns the
+// closer. The false call happens after the last event is written, so a
+// listener masking on this hook sees the whole contact.
+func (in *Injector) touchWindow() func() {
+	if in.OnTouch == nil {
+		return func() {}
+	}
+	in.OnTouch(true)
+	return func() { in.OnTouch(false) }
 }
 
 // Tap presses the touchscreen at a screen-space point for the given duration.
 // Buttons need >=60ms; opening a tool's options panel needs a ~200ms hold.
 func (in *Injector) Tap(p geom.Point, hold time.Duration) error {
+	defer in.touchWindow()()
 	w := &writer{w: in.touch}
 	x, y := ToTouch(p)
 
@@ -268,6 +309,7 @@ func (in *Injector) Swipe(from, to geom.Point, steps int, delay time.Duration) e
 	if steps < 1 {
 		steps = 1
 	}
+	defer in.touchWindow()()
 	w := &writer{w: in.touch}
 
 	x, y := ToTouch(from)

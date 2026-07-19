@@ -4,6 +4,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -67,18 +69,53 @@ func runServe(args []string) error {
 		"zone", fmt.Sprintf("x %.0f-%.0f y %.0f-%.0f", z.X, z.Right(), z.Y, z.Bottom()),
 		"provider", cfg.API.Provider, "model", cfg.API.Model)
 
+	// The gesture listener stays live during a session so the user can cancel
+	// with the same corner double-tap. It reads the very device the session
+	// injects touch on, so each synthetic tap/swipe masks recognition for
+	// exactly its own duration (plus reader-lag linger) instead of pausing
+	// wholesale.
+	s.in.OnTouch = func(active bool) {
+		if active {
+			l.Mask()
+		} else {
+			l.Unmask()
+		}
+	}
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	var (
+		sessDone chan struct{}
+		cancel   context.CancelFunc
+	)
 	for {
 		select {
 		case g := <-l.Gestures():
-			// The session injects touch and pen events on the devices these
-			// listeners read; both stay paused until the session is over.
-			l.Pause()
+			if sessDone != nil {
+				// Any recognised corner gesture during a session means stop —
+				// the user is watching something they want to end, not
+				// requesting a second session.
+				slog.Info("cancel gesture: stopping the running session")
+				cancel()
+				continue
+			}
+			// The eraser listener would log the session's own synthetic
+			// rubber strokes (status-line updates); it stays paused. The
+			// session runs in a goroutine precisely so this loop keeps
+			// consuming gestures — the next one is the cancel.
 			e.Pause()
-			serveSession(cfg, client, s, g)
+			ctx, c := context.WithCancel(context.Background())
+			cancel = c
+			done := make(chan struct{})
+			sessDone = done
+			go func(g trigger.Gesture) {
+				defer close(done)
+				serveSession(ctx, cfg, client, s, g)
+			}(g)
+		case <-sessDone:
+			cancel() // release the context either way
+			sessDone, cancel = nil, nil
 			e.Resume()
-			l.Resume()
 		case es := <-e.Strokes():
 			// Capture only for now: the log is the on-device proof that the
 			// Marker's eraser is seen, and the bbox is what a future consumer
@@ -89,6 +126,16 @@ func runServe(args []string) error {
 				"duration", es.End.Sub(es.Start).Round(time.Millisecond).String())
 		case got := <-sig:
 			slog.Info("shutting down", "signal", got.String())
+			if sessDone != nil {
+				// Give the session a moment to lift the pen and clean up;
+				// systemd's stop timeout is the hard backstop.
+				cancel()
+				select {
+				case <-sessDone:
+				case <-time.After(15 * time.Second):
+					slog.Warn("session did not finish cleanup in time")
+				}
+			}
 			return nil
 		}
 	}
@@ -96,7 +143,11 @@ func runServe(args []string) error {
 
 // serveSession runs one gesture-triggered agent session, converting every
 // failure into a corner mark and a log line — the daemon must keep serving.
-func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Gesture) {
+// A cancelled ctx (the user's corner gesture during the session) stops the
+// model call or the stroke injection at the next point, then cleans up like
+// a normal session end: status line and busy mark erased, pen and tool
+// restored, no error mark — cancelling is not a failure.
+func serveSession(ctx context.Context, cfg config.Config, client llm.Client, s *session, g trigger.Gesture) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("session panicked", "panic", r)
@@ -126,6 +177,16 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 		return
 	}
 
+	// The likeliest cancel is the immediate one — an accidental trigger,
+	// double-tapped away while the gate is still settling. Check between the
+	// slow pre-session steps so that case does not have to wait for the
+	// model call to notice.
+	if ctx.Err() != nil {
+		slog.Info("session cancelled by the user before it started")
+		s.clearBusyMark()
+		return
+	}
+
 	if err := preflight(cfg); err != nil {
 		slog.Error("preflight failed", "err", err)
 		s.markError()
@@ -136,6 +197,12 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 	if err != nil {
 		slog.Error("capture failed", "err", err)
 		s.markError()
+		return
+	}
+
+	if ctx.Err() != nil {
+		slog.Info("session cancelled by the user before it started")
+		s.clearBusyMark()
 		return
 	}
 
@@ -151,11 +218,17 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 	}
 
 	start := time.Now()
-	_, _, err = runAgentSession(cfg, client, s, viewImg, s.pageArea(), g.Mode, false, cfg.API.MaxTurns, "")
-	if err != nil {
+	_, _, err = runAgentSession(ctx, cfg, client, s, viewImg, s.pageArea(), g.Mode, false, cfg.API.MaxTurns, "")
+	switch {
+	case err != nil && errors.Is(err, context.Canceled):
+		// The user asked; whatever ink already landed stays (their undo, not
+		// ours). The busy mark goes — it promises work that will not come.
+		slog.Info("session cancelled by the user", "elapsed", time.Since(start).Round(time.Second))
+		s.clearBusyMark()
+	case err != nil:
 		slog.Error("session failed", "err", err)
 		// runAgentSession already marked the error.
-	} else {
+	default:
 		slog.Info("session served", "elapsed", time.Since(start).Round(time.Second))
 	}
 

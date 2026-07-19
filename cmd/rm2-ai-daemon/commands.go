@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"image"
@@ -52,7 +53,7 @@ func runWriteText(args []string) error {
 	slog.Info("typeset", "lines", len(res.Lines), "strokes", len(res.Strokes), "overflow_lines", len(res.Overflow))
 
 	start := time.Now()
-	if err := s.writeStrokes(res.Strokes, !*noVerify, !*noSelectPen); err != nil {
+	if err := s.writeStrokes(context.Background(), res.Strokes, !*noVerify, !*noSelectPen); err != nil {
 		return err
 	}
 	slog.Info("write complete", "elapsed", time.Since(start).Round(time.Millisecond))
@@ -156,7 +157,7 @@ func runDrawSVG(args []string) error {
 	slog.Info("svg parsed", "paths", len(ds), "strokes", len(fitted))
 
 	start := time.Now()
-	if err := s.writeStrokes(fitted, !*noVerify, true); err != nil {
+	if err := s.writeStrokes(context.Background(), fitted, !*noVerify, true); err != nil {
 		return err
 	}
 	slog.Info("draw complete", "elapsed", time.Since(start).Round(time.Millisecond))

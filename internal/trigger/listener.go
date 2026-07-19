@@ -38,6 +38,13 @@ const touchMaxY = 1871
 // rests still and the device goes quiet.
 const tickInterval = 100 * time.Millisecond
 
+// maskLinger is how long frames stay dropped after an injection mask lifts.
+// The injector's Unmask runs right after its last write, but this reader may
+// still be behind on the stream; the linger absorbs that lag. Injected
+// contacts are milliseconds long — a user gesture spans far more than 300ms,
+// so the linger cannot swallow one whole.
+const maskLinger = 300 * time.Millisecond
+
 // maxSlots is how many multitouch slots are tracked. The panel reports more,
 // but past two fingers the gesture is disqualified anyway.
 const maxSlots = 8
@@ -45,17 +52,21 @@ const maxSlots = 8
 // Listener reads the touchscreen and emits recognised gestures.
 //
 // It only reads — the device is never grabbed, so xochitl keeps seeing every
-// touch (plan 4.1). Pause suspends recognition while the daemon injects its
-// own touch events, which arrive on this very device and must not be
-// mistaken for the user.
+// touch (plan 4.1). The daemon's own injected touch arrives on this very
+// device and must not be mistaken for the user: Mask/Unmask bracket each
+// synthetic contact (wired to inject.Injector.OnTouch) so recognition stays
+// live between them — that is what arms the cancel gesture during a session.
+// Pause remains for callers that want recognition off entirely.
 type Listener struct {
 	f      *os.File
 	ch     chan Gesture
 	paused atomic.Bool
 	log    *slog.Logger
 
-	mu  sync.Mutex // guards det
-	det *Detector
+	mu        sync.Mutex // guards det, maskDepth, maskUntil
+	det       *Detector
+	maskDepth int
+	maskUntil time.Time
 
 	done chan struct{}
 }
@@ -100,6 +111,37 @@ func (l *Listener) Resume() {
 	l.det.Reset()
 	l.mu.Unlock()
 	l.paused.Store(false)
+}
+
+// Mask starts an injection window: frames are dropped until the matching
+// Unmask (plus a short linger for reader lag). Unlike Pause this is meant to
+// bracket a single synthetic tap or swipe — recognition of the user's own
+// fingers resumes immediately after, which is what keeps the cancel gesture
+// armed while a session drives the UI. Wire the injector's OnTouch hook to
+// Mask/Unmask. Nests: two overlapping windows need two Unmasks.
+func (l *Listener) Mask() {
+	l.mu.Lock()
+	l.maskDepth++
+	l.det.Reset()
+	l.mu.Unlock()
+}
+
+// Unmask ends an injection window started by Mask.
+func (l *Listener) Unmask() {
+	l.mu.Lock()
+	if l.maskDepth > 0 {
+		l.maskDepth--
+	}
+	if l.maskDepth == 0 {
+		l.maskUntil = time.Now().Add(maskLinger)
+	}
+	l.det.Reset()
+	l.mu.Unlock()
+}
+
+// masked reports whether frames are currently being dropped. Callers hold mu.
+func (l *Listener) masked(now time.Time) bool {
+	return l.maskDepth > 0 || now.Before(l.maskUntil)
 }
 
 // Close stops both loops and releases the device.
@@ -206,6 +248,12 @@ func (l *Listener) readLoop() {
 					Y: float64(touchMaxY - slots[0].y),
 				}
 				l.mu.Lock()
+				if l.masked(time.Now()) {
+					// Our own injected contact (or its tail): not a gesture.
+					l.det.Reset()
+					l.mu.Unlock()
+					break
+				}
 				g, ok := l.det.Frame(t, fingers, p)
 				l.mu.Unlock()
 				l.emit(g, ok)

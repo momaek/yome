@@ -12,7 +12,6 @@ import (
 //go:embed hershey/futural.jhf
 var FuturalJHF string
 
-
 // UIMaps holds one TOML UI map per calibrated firmware version, under ui/.
 // These are defaults; a config file may override any section.
 //
