@@ -152,6 +152,10 @@ func (s *session) turnPage(dir pageDir) (turned bool, err error) {
 	}
 
 	slog.Debug("page turn swipe", "dir", int(dir), "from", from, "to", to)
+	// A swipe is injected touch: if a status line was just inked, xochitl
+	// would silently drop it and the unchanged frame would masquerade as
+	// "already on the first/last page" — a wrong answer handed to the model.
+	s.touchSettle()
 	if err := s.in.Swipe(from, to, swipeSteps, swipeDelay); err != nil {
 		return false, err
 	}

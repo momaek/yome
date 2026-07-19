@@ -42,16 +42,22 @@ type session struct {
 	orientDetected bool
 	penStyled      bool // configured pen style already forced this session
 
-	// penQuietUntil is when xochitl will accept injected touch again after a
-	// raw pen injection (the busy mark). Mirror of the toolbar-tap → pen
-	// discard window: on-device 2026-07-18, toggle taps fired right after the
-	// hourglass stroke were swallowed wholesale, so the gate refused a
-	// perfectly writable page. Touch taps must wait this out.
-	penQuietUntil time.Time
+	// xochitl silently drops one input kind for a few seconds after the
+	// other: pen strokes after a toolbar/panel tap (M1 finding, ~3s), and
+	// injected touch after a pen injection (2026-07-18: the busy-mark stroke
+	// made the gate's toggle taps vanish). The two deadlines below track both
+	// directions; touchSettle/penSettle wait them out.
+	penQuietUntil   time.Time // when touch becomes safe again (set after pen ink)
+	touchQuietUntil time.Time // when raw pen becomes safe again (set at each tap)
 	// busyMark is where markBusy inked the hourglass (zero when none was
 	// drawn), so a refused session can rub it out instead of leaving what
 	// looks like an eternal loading state.
 	busyMark geom.Rect
+
+	// Status-line state (serve sessions only; see status.go).
+	statusOn   bool
+	statusText string
+	statusBox  geom.Rect // physical-space bounds of the inked line
 
 	pen     penstate.State
 	penErr  error
@@ -174,10 +180,40 @@ func openSession(path string) (*session, error) {
 
 	if s.fb != nil {
 		s.ui = ui.New(ver, in, s.fb, slog.Default())
+		s.ui.BeforeTouch = s.touchSettle
 	} else {
 		slog.Warn("UI actions disabled: probes need the frame buffer")
 	}
 	return s, nil
+}
+
+// penQuiet records that a raw pen injection just happened: xochitl will
+// ignore synthetic touch for roughly the tool-settle window (2026-07-18
+// on-device finding — the mirror of its post-toolbar-tap pen discard).
+func (s *session) penQuiet() {
+	s.penQuietUntil = time.Now().Add(s.cfg.Inject.ToolSettle())
+}
+
+// touchSettle blocks until xochitl accepts injected touch again. Wired into
+// the UI engine's BeforeTouch hook and called before page-turn swipes; a
+// no-op unless pen ink was injected moments ago. It also stamps the reverse
+// deadline: the touch about to fire opens xochitl's pen-discard window.
+func (s *session) touchSettle() {
+	if wait := time.Until(s.penQuietUntil); wait > 0 {
+		slog.Debug("waiting out xochitl's post-pen touch rejection", "wait", wait.Round(time.Millisecond))
+		time.Sleep(wait)
+	}
+	s.touchQuietUntil = time.Now().Add(s.cfg.Inject.ToolSettle())
+}
+
+// penSettle blocks until xochitl accepts raw pen injection again after a
+// tap. The guarded write path (writeStrokes) has its own tap-aware wait;
+// this one is for the unguarded raw injections — status line, mark cleanup.
+func (s *session) penSettle() {
+	if wait := time.Until(s.touchQuietUntil); wait > 0 {
+		slog.Debug("waiting out xochitl's post-tap pen discard", "wait", wait.Round(time.Millisecond))
+		time.Sleep(wait)
+	}
 }
 
 func (s *session) Close() {
@@ -259,17 +295,9 @@ func (s *session) ensureNotebookView() error {
 	if detect() {
 		return nil
 	}
-	// The toggle tap is injected touch, and a raw pen injection (the busy
-	// mark) has just preceded it: xochitl ignores synthetic touch for a few
-	// seconds after pen activity, exactly like its pen-discard window after
-	// a toolbar tap. Tap into that window and both toggle attempts vanish
-	// without a trace (on-device 2026-07-18). Probes are pure reads and need
-	// no such wait — only the taps do.
-	if wait := time.Until(s.penQuietUntil); wait > 0 {
-		slog.Debug("waiting out xochitl's post-pen touch rejection before toggle taps",
-			"wait", wait.Round(time.Millisecond))
-		time.Sleep(wait)
-	}
+	// The toggle taps below are injected touch fired right after the busy
+	// mark's pen stroke; the engine's BeforeTouch hook (→ touchSettle) waits
+	// out xochitl's post-pen rejection window before each one.
 	for _, o := range []ui.Orientation{ui.Portrait, ui.Landscape} {
 		s.ui.SetOrientation(o)
 		if err := s.ui.Tap("toolbar_toggle"); err != nil {

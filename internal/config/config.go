@@ -60,6 +60,7 @@ type Gesture struct {
 	LongPressMs int     `toml:"long_press_ms"` // second tap held this long = in-place mode
 	Confirm     bool    `toml:"confirm"`       // optional two-stage armed confirmation
 	StatusMark  bool    `toml:"status_mark"`   // draw the corner hourglass while a session runs
+	StatusLine  bool    `toml:"status_line"`   // small bottom-edge progress text, erased as it updates
 }
 
 // Rect returns the trigger zone.
@@ -167,6 +168,7 @@ func Default() Config {
 			LongPressMs: 1500,
 			Confirm:     false,
 			StatusMark:  true,
+			StatusLine:  true,
 		},
 		Layout: Layout{
 			CapHeightPx: 50,

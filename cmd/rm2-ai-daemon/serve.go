@@ -139,6 +139,12 @@ func serveSession(cfg config.Config, client llm.Client, s *session, g trigger.Ge
 		return
 	}
 
+	// The status line starts only after the clean screenshot is taken — the
+	// model should not see its own progress display on the page it reads.
+	s.statusOn = cfg.Gesture.StatusLine
+	s.setStatus(statusThinking)
+	defer s.clearStatus()
+
 	var originalTool string
 	if s.ui != nil {
 		originalTool = s.ui.CurrentTool()
@@ -186,10 +192,9 @@ func (s *session) markBusy(at geom.Point) {
 		return
 	}
 	s.busyMark = geom.Rect{X: x0, Y: y0, W: size, H: size}
-	// Injected touch is dead to xochitl for a few seconds now; the notebook
-	// gate's toggle taps wait this out (same window as tool_settle_ms, just
-	// mirrored — pen first, touch after).
-	s.penQuietUntil = time.Now().Add(s.cfg.Inject.ToolSettle())
+	// Injected touch is dead to xochitl for a few seconds now; every later
+	// touch (gate toggles, panel taps, swipes) waits it out via touchSettle.
+	s.penQuiet()
 }
 
 // clearBusyMark rubs out the hourglass with the synthetic eraser — raw
@@ -198,14 +203,15 @@ func (s *session) markBusy(at geom.Point) {
 // indistinguishable from a hang. On a non-canvas screen (home, menus) both
 // the mark and the erase were no-ops, so calling it unconditionally is safe.
 // The gate's toggle taps may have just opened xochitl's discard window for
-// pen input (tool_settle_ms), which the rubber shares — wait it out first.
+// pen input (tool_settle_ms), which the rubber shares — penSettle waits out
+// exactly the remainder.
 func (s *session) clearBusyMark() {
 	if s.busyMark.W == 0 {
 		return
 	}
 	m := s.busyMark
 	s.busyMark = geom.Rect{}
-	time.Sleep(s.cfg.Inject.ToolSettle())
+	s.penSettle()
 	// A serpentine of horizontal passes 12px apart: dense enough to cover
 	// the 36px glyph even with xochitl's thinnest eraser band.
 	var pts []geom.Point
