@@ -206,6 +206,22 @@ only the code paths that actually touch the device return errors elsewhere.
 **The device is the only authority**: each milestone is accepted on real
 hardware, with `capture` + black-pixel fingerprints as automated assertions.
 
+## Acknowledgements
+
+- [makemeahanzi](https://github.com/skishore/makemeahanzi) — the CJK stroke
+  medians embedded in `assets/cjk/medians.bin.gz` are built from its
+  `graphics.txt`, which derives from fonts by Arphic Technology released
+  under the [Arphic Public License](assets/cjk/ARPHICPL.TXT).
+- [Hershey fonts](https://en.wikipedia.org/wiki/Hershey_fonts) — the
+  single-line Latin strokes (`assets/hershey/futural.jhf`) are Dr. Allen V.
+  Hershey's vector fonts (U.S. National Bureau of Standards), in the JHF
+  format distributed by James Hurt.
+- The reMarkable homebrew community — [remarkable.guide](https://remarkable.guide)
+  and [awesome-reMarkable](https://github.com/reHackable/awesome-reMarkable)
+  document the device internals this project builds on.
+
 ## License
 
-TODO
+[Apache-2.0](LICENSE). The embedded CJK stroke data
+(`assets/cjk/medians.bin.gz`) derives from Arphic fonts and remains under
+the [Arphic Public License](assets/cjk/ARPHICPL.TXT).
