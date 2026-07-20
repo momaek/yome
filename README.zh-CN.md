@@ -181,6 +181,19 @@ UI 状态机(用假屏幕与假点击器)都是纯逻辑。evdev 与 `/proc` 访
 
 **真机是唯一权威**:每个里程碑的验收在设备上做,`capture` + 黑像素指纹作为自动化断言。
 
+## 致谢
+
+- [makemeahanzi](https://github.com/skishore/makemeahanzi) —— 内嵌的 CJK 笔画中线数据
+  (`assets/cjk/medians.bin.gz`)由其 `graphics.txt` 生成,数据源自文鼎科技
+  (Arphic Technology)以 [Arphic Public License](assets/cjk/ARPHICPL.TXT) 发布的字体。
+- [Hershey 字体](https://en.wikipedia.org/wiki/Hershey_fonts) —— 拉丁文单线笔画
+  (`assets/hershey/futural.jhf`)来自 Allen V. Hershey 博士(美国国家标准局)的矢量字体,
+  JHF 格式由 James Hurt 整理分发。
+- reMarkable 社区 —— [remarkable.guide](https://remarkable.guide) 与
+  [awesome-reMarkable](https://github.com/reHackable/awesome-reMarkable)
+  记录了本项目所依赖的设备内部机制。
+
 ## License
 
-TODO
+[Apache-2.0](LICENSE)。内嵌的 CJK 笔画数据(`assets/cjk/medians.bin.gz`)源自文鼎字体,
+仍遵循 [Arphic Public License](assets/cjk/ARPHICPL.TXT)。
